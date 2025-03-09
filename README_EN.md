@@ -25,7 +25,7 @@ This tool uses historical data from Binance to compare the price correlation bet
 1. Clone this repository:
 
 ```bash
-git clone https://github.com/yourusername/crypto-correlation-analyzer.git
+git clone https://github.com/zhiyu1105/crypto-correlation-analyzer.git
 cd crypto-correlation-analyzer
 ```
 
