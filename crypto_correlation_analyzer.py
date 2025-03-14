@@ -365,20 +365,237 @@ class CryptoCorrelationAnalyzer:
         
         # Sort by average correlation
         all_corr['avg'] = all_corr.mean(axis=1)
+        
+        # Get top positive correlated symbols
         top_symbols = all_corr.sort_values('avg', ascending=False).drop(self.eth_symbol).head(top_n).index.tolist()
         
-        # Create heatmap data
-        heatmap_data = all_corr.loc[top_symbols].drop(columns=['avg'])
+        # Get top negative correlated symbols
+        bottom_symbols = all_corr.sort_values('avg', ascending=True).drop(self.eth_symbol).head(top_n).index.tolist()
         
-        # Create heatmap
+        # Create positive correlation heatmap data
+        heatmap_data_positive = all_corr.loc[top_symbols].drop(columns=['avg'])
+        
+        # Create negative correlation heatmap data
+        heatmap_data_negative = all_corr.loc[bottom_symbols].drop(columns=['avg'])
+        
+        # Create positive correlation heatmap
         plt.figure(figsize=(12, 10))
-        sns.heatmap(heatmap_data, annot=True, cmap='viridis', fmt='.2f')
+        sns.heatmap(heatmap_data_positive, annot=True, cmap='viridis', fmt='.2f')
+        plt.title(f'Top {top_n} Positively Correlated Symbols with {self.eth_symbol} Across Timeframes')
+        plt.tight_layout()
+        plt.savefig('correlation_heatmap_positive.png', dpi=300)
+        plt.show()
+        
+        # Create negative correlation heatmap
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(heatmap_data_negative, annot=True, cmap='coolwarm', fmt='.2f')
+        plt.title(f'Top {top_n} Negatively Correlated Symbols with {self.eth_symbol} Across Timeframes')
+        plt.tight_layout()
+        plt.savefig('correlation_heatmap_negative.png', dpi=300)
+        plt.show()
+        
+        # Create combined heatmap (original functionality)
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(heatmap_data_positive, annot=True, cmap='viridis', fmt='.2f')
         plt.title(f'Top {top_n} Correlated Symbols with {self.eth_symbol} Across Timeframes')
         plt.tight_layout()
         plt.savefig('correlation_heatmap.png', dpi=300)
         plt.show()
         
-        return heatmap_data
+        return heatmap_data_positive, heatmap_data_negative
+
+    def analyze_eth_downtrend_resilience(self, results, start_date, end_date, downtrend_threshold=-0.05, rebound_threshold=0.03, window_size=5, top_n=10):
+    
+        print(f"\nAnalyzing cryptocurrencies that remain stable during ETH downtrend...")
+        
+        # 1. Fetch historical data for ETH (using a 1-hour timeframe to capture more details)
+        eth_data = self.download_historical_data(self.eth_symbol, '1h', start_date, end_date)
+        
+        # 2. Identify ETH downtrend periods
+        eth_data['pct_change'] = eth_data['close'].pct_change(window_size)
+        
+        # Identify periods when ETH experienced a significant drop
+        downtrend_periods = []
+        current_downtrend = None
+        
+        for idx, row in eth_data.iterrows():
+            if row['pct_change'] <= downtrend_threshold and current_downtrend is None:
+                # Start a new downtrend period
+                current_downtrend = {'start': idx, 'prices': [row['close']]}
+            elif row['pct_change'] <= downtrend_threshold and current_downtrend is not None:
+                # Continue the current downtrend period
+                current_downtrend['prices'].append(row['close'])
+            elif row['pct_change'] >= rebound_threshold and current_downtrend is not None:
+                # End the downtrend period as ETH begins to rebound
+                current_downtrend['end'] = idx
+                current_downtrend['end_price'] = row['close']
+                current_downtrend['start_price'] = current_downtrend['prices'][0]
+                current_downtrend['lowest_price'] = min(current_downtrend['prices'])
+                current_downtrend['drop_pct'] = (current_downtrend['lowest_price'] / current_downtrend['start_price'] - 1) * 100
+                current_downtrend['rebound_pct'] = (current_downtrend['end_price'] / current_downtrend['lowest_price'] - 1) * 100
+                
+                downtrend_periods.append(current_downtrend)
+                current_downtrend = None
+        
+        # If the last downtrend period hasn't ended
+        if current_downtrend is not None:
+            current_downtrend['end'] = eth_data.index[-1]
+            current_downtrend['end_price'] = eth_data['close'].iloc[-1]
+            current_downtrend['start_price'] = current_downtrend['prices'][0]
+            current_downtrend['lowest_price'] = min(current_downtrend['prices'])
+            current_downtrend['drop_pct'] = (current_downtrend['lowest_price'] / current_downtrend['start_price'] - 1) * 100
+            current_downtrend['rebound_pct'] = (current_downtrend['end_price'] / current_downtrend['lowest_price'] - 1) * 100
+            
+            downtrend_periods.append(current_downtrend)
+        
+        print(f"Found {len(downtrend_periods)} ETH downtrend periods")
+        
+        if len(downtrend_periods) == 0:
+            print("No ETH downtrend periods meeting the criteria were found within the specified date range")
+            return None, None, None
+        
+        # 3. Analyze negatively correlated assets during each downtrend period
+        # Get all USDT trading pairs
+        all_symbols = self.get_all_futures_symbols()
+        usdt_symbols = [s for s in all_symbols if s.endswith('USDT')]
+        
+        # Store the performance of each coin during the downtrend period
+        downtrend_performance = {}
+        rebound_performance = {}
+        
+        for period in downtrend_periods:
+            period_start = period['start']
+            period_end = period['end']
+            period_lowest = eth_data[eth_data['close'] == period['lowest_price']].index[0]
+            
+            print(f"\nAnalyzing downtrend period: {period_start.strftime('%Y-%m-%d %H:%M')} to {period_end.strftime('%Y-%m-%d %H:%M')}")
+            print(f"ETH drop: {period['drop_pct']:.2f}%, Rebound: {period['rebound_pct']:.2f}%")
+            
+            # Analyze performance for each coin
+            for symbol in tqdm(usdt_symbols, desc="Analyzing coin performance"):
+                if symbol == self.eth_symbol:
+                    continue
+                
+                try:
+                    # Fetch historical data for the coin
+                    coin_data = self.download_historical_data(symbol, '1h', 
+                                                            period_start.strftime('%Y-%m-%d'), 
+                                                            period_end.strftime('%Y-%m-%d'))
+                    
+                    if coin_data.empty or len(coin_data) < 2:
+                        continue
+                    
+                    # Calculate performance during the downtrend period
+                    try:
+                        # Get the prices at the corresponding time points
+                        start_price = coin_data.loc[:period_start].iloc[-1]['close']
+                        lowest_time_price = coin_data.loc[:period_lowest].iloc[-1]['close']
+                        end_price = coin_data.loc[:period_end].iloc[-1]['close']
+                        
+                        # Calculate the percentage change during the downtrend period
+                        downtrend_pct = (lowest_time_price / start_price - 1) * 100
+                        
+                        # Calculate the percentage change during the ETH rebound period
+                        rebound_pct = (end_price / lowest_time_price - 1) * 100
+                        
+                        # Store the results
+                        if symbol not in downtrend_performance:
+                            downtrend_performance[symbol] = []
+                        
+                        if symbol not in rebound_performance:
+                            rebound_performance[symbol] = []
+                        
+                        downtrend_performance[symbol].append(downtrend_pct)
+                        rebound_performance[symbol].append(rebound_pct)
+                        
+                    except (KeyError, IndexError) as e:
+                        # Time point mismatch, skip this coin
+                        continue
+                        
+                except Exception as e:
+                    print(f"Error analyzing {symbol}: {e}")
+                    continue
+        
+        # 4. Calculate average performance
+        avg_downtrend = {}
+        avg_rebound = {}
+        
+        for symbol in downtrend_performance:
+            if len(downtrend_performance[symbol]) > 0:
+                avg_downtrend[symbol] = sum(downtrend_performance[symbol]) / len(downtrend_performance[symbol])
+            
+        for symbol in rebound_performance:
+            if len(rebound_performance[symbol]) > 0:
+                avg_rebound[symbol] = sum(rebound_performance[symbol]) / len(rebound_performance[symbol])
+        
+        # 5. Identify the coins with the most stable performance during ETH downtrend (i.e., the smallest drop or even an increase)
+        stable_coins = pd.Series(avg_downtrend).sort_values(ascending=False)
+        
+        # 6. Identify the coins with the best performance during ETH rebound
+        best_rebounders = pd.Series(avg_rebound).sort_values(ascending=False)
+        
+        # 7. Identify the coins that are both stable and have a good rebound
+        combined_score = {}
+        
+        for symbol in stable_coins.index:
+            if symbol in best_rebounders.index:
+                # Combined score = downtrend performance + rebound performance
+                combined_score[symbol] = stable_coins[symbol] + best_rebounders[symbol]
+        
+        best_combined = pd.Series(combined_score).sort_values(ascending=False)
+        
+        # 8. Create a results DataFrame
+        result_df = pd.DataFrame({
+            'Downtrend Performance (%)': stable_coins,
+            'Rebound Performance (%)': best_rebounders,
+            'Combined Score': best_combined
+        })
+        
+        # 9. Visualize the results
+        # 9.1 Top N coins with the best downtrend performance
+        plt.figure(figsize=(12, 8))
+        sns.barplot(x=stable_coins.head(top_n).values, y=stable_coins.head(top_n).index, palette='viridis')
+        plt.title(f'Top {top_n} Cryptocurrencies with the Most Stable Performance during ETH Downtrend')
+        plt.xlabel('Price Change Percentage (%)')
+        plt.ylabel('Coin')
+        plt.tight_layout()
+        plt.savefig('eth_downtrend_stable_coins.png', dpi=300)
+        plt.show()
+        
+        # 9.2 Top N coins with the best performance during ETH rebound
+        plt.figure(figsize=(12, 8))
+        sns.barplot(x=best_rebounders.head(top_n).values, y=best_rebounders.head(top_n).index, palette='viridis')
+        plt.title(f'Top {top_n} Cryptocurrencies with the Best Performance during ETH Rebound')
+        plt.xlabel('Price Change Percentage (%)')
+        plt.ylabel('Coin')
+        plt.tight_layout()
+        plt.savefig('eth_rebound_best_coins.png', dpi=300)
+        plt.show()
+        
+        # 9.3 Top N coins with the best combined performance during the ETH market cycle
+        plt.figure(figsize=(12, 8))
+        sns.barplot(x=best_combined.head(top_n).values, y=best_combined.head(top_n).index, palette='viridis')
+        plt.title(f'Top {top_n} Cryptocurrencies with the Best Combined Performance in the ETH Market Cycle')
+        plt.xlabel('Combined Score')
+        plt.ylabel('Coin')
+        plt.tight_layout()
+        plt.savefig('eth_cycle_best_coins.png', dpi=300)
+        plt.show()
+        
+        # 10. Save the results to a CSV file
+        result_df.to_csv('eth_market_cycle_analysis.csv')
+        
+        print("\nAnalysis complete!")
+        print(f"Top {top_n} cryptocurrencies with the most stable performance during ETH downtrend:")
+        print(stable_coins.head(top_n))
+        
+        print(f"\nTop {top_n} cryptocurrencies with the best performance during ETH rebound:")
+        print(best_rebounders.head(top_n))
+        
+        print(f"\nTop {top_n} cryptocurrencies with the best combined performance in the ETH market cycle:")
+        print(best_combined.head(top_n))
+        
+        return stable_coins, best_rebounders, best_combined
 
 
 def main():
@@ -396,13 +613,57 @@ def main():
     
     print(f"Analyzing data from {start_date} to {end_date} with max {max_klines} K-lines per timeframe")
     
-    # Analyze all timeframes
-    results = analyzer.analyze_all_timeframes(start_date, end_date, top_n=20, use_cache=True)
+    # 選擇分析模式
+    print("\n請選擇分析模式:")
+    print("1. 標準相關性分析")
+    print("2. ETH下跌期間穩定幣種分析")
+    print("3. 兩種分析都執行")
     
-    # Create correlation heatmap
-    heatmap_data = analyzer.create_correlation_heatmap(results, top_n=20)
+    choice = input("請輸入選項 (1/2/3): ").strip()
     
-    print("Analysis complete!")
+    if choice in ['1', '3']:
+        # Analyze all timeframes
+        results = analyzer.analyze_all_timeframes(start_date, end_date, top_n=20, use_cache=True)  # use Cache
+        
+        # Create correlation heatmap
+        heatmap_data_positive, heatmap_data_negative = analyzer.create_correlation_heatmap(results, top_n=20)
+        
+        print("標準相關性分析完成!")
+        print(f"Positive correlation heatmap saved as 'correlation_heatmap_positive.png'")
+        print(f"Negative correlation heatmap saved as 'correlation_heatmap_negative.png'")
+        print(f"Original correlation heatmap saved as 'correlation_heatmap.png'")
+    
+    if choice in ['2', '3']:
+        # 設置更長的時間範圍來分析ETH下跌期間
+        long_start_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+        
+        print(f"\n分析ETH下跌期間的穩定幣種 (時間範圍: {long_start_date} 到 {end_date})")
+        
+        # 如果已經執行了標準分析，使用其結果；否則執行一個快速分析
+        if choice == '3':
+            # 使用已有的結果
+            stable_coins, best_rebounders, best_combined = analyzer.analyze_eth_downtrend_resilience(
+                results, long_start_date, end_date, 
+                downtrend_threshold=-0.05,  # ETH下跌5%視為下跌期
+                rebound_threshold=0.03,     # ETH反彈3%視為反彈期
+                window_size=5,              # 5小時窗口
+                top_n=10                    # 顯示前10名
+            )
+        else:
+            # 執行快速分析獲取結果
+            quick_results = analyzer.analyze_all_timeframes(long_start_date, end_date, top_n=20, use_cache=True)
+            stable_coins, best_rebounders, best_combined = analyzer.analyze_eth_downtrend_resilience(
+                quick_results, long_start_date, end_date, 
+                downtrend_threshold=-0.05,
+                rebound_threshold=0.03,
+                window_size=5,
+                top_n=10
+            )
+        
+        print("ETH下跌期間穩定幣種分析完成!")
+        print("結果已保存到 'eth_market_cycle_analysis.csv'")
+    
+    print("\n所有分析完成!")
 
 
 if __name__ == "__main__":

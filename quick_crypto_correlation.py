@@ -206,12 +206,25 @@ def visualize_correlation(correlation, timeframe):
     # Save the correlation data first (this is the important part)
     correlation.to_csv(f'{data_dir}/correlation_{timeframe}.csv')
     
-    # Lower resolution for faster rendering
-    plt.figure(figsize=(10, 6))
-    sns.barplot(x=correlation.values, y=correlation.index, palette='viridis')
-    plt.title(f'Correlation with {eth_symbol} ({timeframe})')
-    plt.xlabel('Correlation')
-    plt.ylabel('Symbol')
+    # Get top positive and negative correlations
+    top_positive = correlation.drop(eth_symbol).head(10)
+    top_negative = correlation.drop(eth_symbol).tail(10)
+    
+    # Create figure with two subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 8))
+    
+    # Plot top positive correlations
+    sns.barplot(x=top_positive.values, y=top_positive.index, ax=ax1, palette='viridis')
+    ax1.set_title(f'Top Positive Correlations with {eth_symbol} ({timeframe})')
+    ax1.set_xlabel('Correlation')
+    ax1.set_ylabel('Symbol')
+    
+    # Plot top negative correlations
+    sns.barplot(x=top_negative.values, y=top_negative.index, ax=ax2, palette='coolwarm')
+    ax2.set_title(f'Top Negative Correlations with {eth_symbol} ({timeframe})')
+    ax2.set_xlabel('Correlation')
+    ax2.set_ylabel('Symbol')
+    
     plt.tight_layout()
     plt.savefig(f'{data_dir}/correlation_{timeframe}.png', dpi=150)  # Lower DPI for faster saving
 
