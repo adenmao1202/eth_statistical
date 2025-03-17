@@ -1,120 +1,133 @@
-# 加密貨幣相關性分析工具 (Cryptocurrency Correlation Analyzer)
+# Cryptocurrency Analysis Tool
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+A comprehensive tool for analyzing cryptocurrency correlations and performance during market downtrends, with a focus on optimizing API usage to avoid rate limits.
 
-[English](README_EN.md) | 繁體中文
+## Features
 
-這個工具使用Binance的歷史數據，以ETH為基準，比較所有其他加密貨幣合約價格的相關性。分析涵蓋了多個時間週期（1分鐘、5分鐘、15分鐘、1小時和4小時）。專為交易者和投資者設計，幫助發現市場相關性模式。
+- **Correlation Analysis**: Identify cryptocurrencies with high or low correlation to a reference symbol (default: ETH)
+- **Downtrend Analysis**: Find stable coins during ETH downtrends and coins that rebound well after downtrends
+- **Multi-Timeframe Analysis**: Analyze correlations across different timeframes (1m, 5m, 15m, 1h, 4h)
+- **Visualization**: Generate charts and heatmaps to visualize correlations and price movements
+- **API Optimization**: Smart handling of Binance API rate limits with caching, batching, and proxy support
 
-<p align="center">
-  <img src="correlation_heatmap.png" alt="相關性熱圖範例" width="600">
-</p>
+## Installation
 
-## 功能特點
-
-- 從Binance下載歷史價格數據
-- 計算ETH與其他加密貨幣的價格相關性
-- 支持多個時間週期的分析（1m、5m、15m、1h、4h）
-- 視覺化相關性結果（條形圖和熱圖）
-- 數據緩存功能，避免重複下載
-- 多線程並行處理，提高分析速度
-- 優化的數據處理和相關性計算
-
-## 安裝步驟
-
-1. 克隆此倉庫：
-
+1. Clone the repository:
 ```bash
-git clone https://github.com/zhiyu1105/crypto-correlation-analyzer.git
-cd crypto-correlation-analyzer
+git clone https://github.com/yourusername/crypto-analysis-tool.git
+cd crypto-analysis-tool
 ```
 
-2. 安裝依賴：
-
+2. Install the required dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-## 使用方法
+## Usage
 
-### 基本用法
-
-直接運行主程序：
+### Basic Correlation Analysis
 
 ```bash
-python crypto_correlation_analyzer.py
+python main.py --timeframe 1h --days 30
 ```
 
-默認情況下，程序會：
-- 分析過去30天的數據
-- 顯示與ETH相關性最高的前20個加密貨幣
-- 為每個時間週期生成相關性圖表
-- 創建一個跨時間週期的相關性熱圖
+This will analyze correlations between all USDT trading pairs and ETHUSDT over the last 30 days using 1-hour candles.
 
-### 快速分析模式
-
-如果只需要快速分析特定時間週期，可以使用：
+### Downtrend Analysis
 
 ```bash
-python quick_crypto_correlation.py
+python main.py --downtrend --timeframe 1h --days 30 --drop_threshold -0.05
 ```
 
-## 自定義分析
+This will identify ETH downtrends (drops of 5% or more) and analyze which coins remain stable during these periods and which rebound well afterward.
 
-如需自定義分析參數，可以修改`crypto_correlation_analyzer.py`文件中的`main()`函數：
+### Multi-Timeframe Analysis
 
-```python
-# 設置日期範圍
-end_date = datetime.now().strftime('%Y-%m-%d')
-start_date = (datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d')  # 修改天數
-
-# 分析所有時間週期
-results = analyzer.analyze_all_timeframes(start_date, end_date, top_n=20, use_cache=True)  # 修改top_n參數
+```bash
+python main.py --correlation --all_timeframes --days 14
 ```
 
-## API密鑰（可選）
+This will analyze correlations across all available timeframes (1m, 5m, 15m, 1h, 4h) over the last 14 days and generate a heatmap.
 
-如果需要更高的API請求限制，可以在`main()`函數中設置Binance API密鑰：
+### Optimizing API Usage
 
-```python
-# 設置Binance API憑證
-api_key = "YOUR_API_KEY"  # 替換為您的API密鑰
-api_secret = "YOUR_API_SECRET"  # 替換為您的API密鑰
+```bash
+python main.py --optimize --track_api_usage --request_delay 0.5 --max_workers 4
 ```
 
-## 輸出文件
+This will optimize request parameters based on your analysis needs and track API usage statistics.
 
-程序會生成以下文件：
-- `historical_data/` 目錄：包含下載的歷史數據CSV文件
-- `correlation_1m.csv`、`correlation_5m.csv`等：各時間週期的相關性數據
-- `correlation_1m.png`、`correlation_5m.png`等：各時間週期的相關性條形圖
-- `correlation_heatmap.png`：跨時間週期的相關性熱圖
+## Command Line Arguments
 
-## 項目結構
+### Data Fetching Parameters
 
-```
-├── crypto_correlation_analyzer.py  # 主程序
-├── quick_crypto_correlation.py     # 快速分析程序
-├── requirements.txt               # 依賴包列表
-├── README.md                      # 說明文檔
-├── README_EN.md                   # 英文說明文檔
-├── .gitignore                     # Git忽略文件
-├── historical_data/               # 歷史數據目錄
-├── correlation_*.csv              # 相關性數據文件
-└── correlation_*.png              # 相關性圖表文件
-```
+- `--api_key`: Binance API key
+- `--api_secret`: Binance API secret
+- `--max_klines`: Maximum number of klines to fetch (default: 200)
+- `--request_delay`: Delay between API requests in seconds (default: 1.0)
+- `--max_workers`: Maximum number of concurrent workers (default: 5)
+- `--use_proxies`: Use proxy rotation for API requests
+- `--proxies`: List of proxy URLs
+- `--cache_expiry`: Cache expiry time in seconds (default: 86400)
 
-## 注意事項
+### Analysis Parameters
 
-- 首次運行時，程序需要從Binance下載大量數據，可能需要較長時間
-- 使用緩存功能（`use_cache=True`）可以加快後續運行速度
-- Binance API有請求頻率限制，程序已添加延遲以避免超出限制
-- 對於大量數據分析，建議使用較高性能的計算機
+- `--reference_symbol`: Reference trading pair symbol (default: ETHUSDT)
+- `--timeframe`: Timeframe for analysis (default: 1h, choices: 1m, 5m, 15m, 1h, 4h)
+- `--days`: Number of days to analyze (default: 30)
+- `--start_date`: Start date in YYYY-MM-DD format
+- `--end_date`: End date in YYYY-MM-DD format
+- `--top_n`: Number of top results to display (default: 20)
+- `--window_size`: Window size for calculations (default: 20)
+- `--drop_threshold`: Threshold for identifying significant drops (default: -0.03)
 
-## 貢獻指南
+### Analysis Modes
 
-歡迎提交問題和改進建議！請隨時提交 Issue 或 Pull Request。
+- `--correlation`: Perform correlation analysis
+- `--downtrend`: Perform downtrend analysis
+- `--all_timeframes`: Analyze all timeframes
+- `--no_cache`: Disable cache usage
 
-## 許可證
+### Optimization
 
-本項目採用 [MIT 許可證](LICENSE)。
+- `--optimize`: Optimize request parameters based on analysis needs
+- `--track_api_usage`: Track and display API usage statistics
+
+## Avoiding Binance API Rate Limits
+
+The tool includes several features to help avoid hitting Binance API rate limits:
+
+1. **Caching**: Historical data is cached to avoid redundant API calls
+2. **Batching**: Requests are processed in optimal batch sizes based on current rate limit usage
+3. **Rate Limiting**: Automatic waiting between requests to stay within rate limits
+4. **Proxy Support**: Option to rotate through multiple proxies to increase request capacity
+5. **Exponential Backoff**: Automatic retry with increasing delays when rate limits are approached
+
+## Output Files
+
+The tool generates several output files:
+
+- `correlation_[timeframe].csv`: CSV file with correlation values for each trading pair
+- `correlation_[timeframe].png`: Bar chart showing top positive and negative correlations
+- `correlation_heatmap.png`: Heatmap of correlations across timeframes
+- `eth_downtrends.png`: Chart showing identified ETH downtrend periods
+- `eth_stable_coins.png`: Chart showing performance of stable coins during downtrends
+- `eth_rebound_best_coins.png`: Chart showing performance of coins that rebound well after downtrends
+- `performance_scatter_plot.png`: Scatter plot of downtrend vs rebound performance
+
+## Project Structure
+
+- `main.py`: Entry point for the tool
+- `config.py`: Configuration parameters
+- `data_fetcher.py`: Handles data retrieval from Binance API
+- `utils.py`: Utility functions for caching, rate limiting, and proxy management
+- `analyzer.py`: Correlation analysis functionality
+- `downtrend_analyzer.py`: Downtrend analysis functionality
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Disclaimer
+
+This tool is for educational and research purposes only. It is not financial advice. Always do your own research before making investment decisions.

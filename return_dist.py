@@ -31,6 +31,12 @@ def parse_arguments():
     parser.add_argument('--days', type=int, default=60,
                         help='Number of days to analyze (default: 60)')
     
+    parser.add_argument('--start_date', type=str, default=None,
+                        help='Start date in YYYY-MM-DD format (default: days ago from today)')
+    
+    parser.add_argument('--end_date', type=str, default=None,
+                        help='End date in YYYY-MM-DD format (default: today)')
+    
     parser.add_argument('--windows', type=str, default='1,3,5,10,20',
                         help='Window sizes to analyze, separated by commas (default: 1,3,5,10,20)')
     
@@ -56,8 +62,8 @@ def load_local_data(data_dir, symbol, timeframe):
     return None
 
 
-def analyze_eth_returns(data_dir, timeframes, start_date, end_date, windows):
-    """
+def analyze_eth_returns(data_dir, timeframes, start_date, end_date, windows):  # call local_eth_analyzer 
+    """ 
     Analyze the return distribution of ETH over different timeframes and window sizes.
     
     Args:
@@ -76,6 +82,19 @@ def analyze_eth_returns(data_dir, timeframes, start_date, end_date, windows):
     start_dt = pd.to_datetime(start_date)
     end_dt = pd.to_datetime(end_date)
     
+    # Check if data directory exists
+    if not os.path.exists(data_dir):
+        print(f"Warning: Data directory '{data_dir}' does not exist. Creating it.")
+        os.makedirs(data_dir, exist_ok=True)
+    
+    # Check for data files
+    data_files = glob.glob(f"{data_dir}/{eth_symbol}_*.csv")
+    if not data_files:
+        print(f"Warning: No data files found for {eth_symbol} in {data_dir}.")
+        print("Please run the main.py script first to download historical data.")
+        print("Example: python main.py --correlation --timeframe 1m,15m --days 180")
+        return results
+    
     for timeframe in timeframes:
         print(f"\nAnalyzing ETH return distribution for the {timeframe} timeframe...")
         
@@ -84,13 +103,24 @@ def analyze_eth_returns(data_dir, timeframes, start_date, end_date, windows):
         
         if eth_data is None:
             print(f"Warning: Could not find ETH {timeframe} data file {data_dir}/{eth_symbol}_{timeframe}.csv")
+            print(f"Available data files: {[os.path.basename(f) for f in data_files]}")
             continue
+        
+        # Print data info
+        print(f"Loaded data shape: {eth_data.shape}")
+        print(f"Date range in data: {eth_data.index.min()} to {eth_data.index.max()}")
         
         # Filter by date range
         eth_data = eth_data[(eth_data.index >= start_dt) & (eth_data.index <= end_dt)]
         
+        print(f"After date filtering, data shape: {eth_data.shape}")
+        if eth_data.empty:
+            print(f"Warning: No data available for the specified date range {start_date} to {end_date}")
+            continue
+        
         if len(eth_data) < max(windows) + 1:
             print(f"Warning: Insufficient data for ETH {timeframe}. At least {max(windows) + 1} data points are required.")
+            print(f"Current data points: {len(eth_data)}")
             continue
         
         # Calculate returns for different window sizes
@@ -103,9 +133,21 @@ def analyze_eth_returns(data_dir, timeframes, start_date, end_date, windows):
             # Remove NaN values
             returns = eth_data[f'return_{window}'].dropna()
             
+            print(f"Window size {window}: {len(returns)} valid return values")
+            
+            # Print basic statistics
+            if not returns.empty:
+                print(f"  Min: {returns.min():.2f}%, Max: {returns.max():.2f}%, Mean: {returns.mean():.2f}%")
+            
             timeframe_results[window] = returns
             
         results[timeframe] = timeframe_results
+    
+    # Check if we have any results
+    if not results:
+        print("Warning: No valid results were generated. Please check your data and parameters.")
+    else:
+        print(f"Successfully analyzed {len(results)} timeframes.")
     
     return results
 
@@ -236,44 +278,26 @@ def plot_percentile_heatmap(stats_df, percentiles):
             print("Error: No valid downtrend percentile columns found")
             return
     
-    pivot_down = stats_df.pivot_table(
-        index='Window Size', 
-        columns='Timeframe',
-        values=downtrend_cols
-    )
+    # Create pivot table for downtrend percentiles
+    pivot_tables = {}
+    for col in downtrend_cols:
+        # Create a pivot table for each percentile
+        pivot = stats_df.pivot_table(
+            index='Window Size', 
+            columns='Timeframe',
+            values=col
+        )
+        pivot_tables[col] = pivot
     
-    # Check pivot table structure
-    print("Pivot table structure:")
-    print(pivot_down.columns.names)
-    print(pivot_down.columns.levels)
-    
-    # Create multi-index heatmaps
+    # Create figure for downtrend percentiles
     fig, axes = plt.subplots(len(downtrend_cols), 1, figsize=(12, 4 * len(downtrend_cols)))
     if len(downtrend_cols) == 1:
         axes = [axes]  # Ensure axes is always a list
     
+    # Plot each percentile
     for i, col in enumerate(downtrend_cols):
         ax = axes[i]
-        
-        try:
-            # Try extracting data using xs
-            data = pivot_down.xs(col, axis=1, level=1)
-        except KeyError:
-            # If it fails, try an alternative approach
-            print(f"Could not find column '{col}' in level 1. Trying alternative approach.")
-            print(f"Pivot table columns: {pivot_down.columns}")
-            
-            # Attempt to find all columns containing the percentile
-            cols_with_percentile = [c for c in pivot_down.columns if col in str(c)]
-            if not cols_with_percentile:
-                print(f"No columns containing '{col}' found. Skipping this percentile.")
-                continue
-            
-            # Create a new DataFrame with only these columns
-            data = pd.DataFrame()
-            for c in cols_with_percentile:
-                tf = c[0]  # Timeframe
-                data[tf] = pivot_down[c]
+        data = pivot_tables[col]
         
         # Plot heatmap
         sns.heatmap(data, annot=True, fmt='.2f', cmap='coolwarm', ax=ax)
@@ -300,38 +324,26 @@ def plot_percentile_heatmap(stats_df, percentiles):
             print("Error: No valid uptrend percentile columns found")
             return
     
-    pivot_up = stats_df.pivot_table(
-        index='Window Size', 
-        columns='Timeframe',
-        values=uptrend_cols
-    )
+    # Create pivot table for uptrend percentiles
+    pivot_tables = {}
+    for col in uptrend_cols:
+        # Create a pivot table for each percentile
+        pivot = stats_df.pivot_table(
+            index='Window Size', 
+            columns='Timeframe',
+            values=col
+        )
+        pivot_tables[col] = pivot
     
-    # Create multi-index heatmaps
+    # Create figure for uptrend percentiles
     fig, axes = plt.subplots(len(uptrend_cols), 1, figsize=(12, 4 * len(uptrend_cols)))
     if len(uptrend_cols) == 1:
         axes = [axes]  # Ensure axes is always a list
     
+    # Plot each percentile
     for i, col in enumerate(uptrend_cols):
         ax = axes[i]
-        
-        try:
-            # Try extracting data using xs
-            data = pivot_up.xs(col, axis=1, level=1)
-        except KeyError:
-            # If it fails, try an alternative approach
-            print(f"Could not find column '{col}' in level 1. Trying alternative approach.")
-            
-            # Attempt to find all columns containing the percentile
-            cols_with_percentile = [c for c in pivot_up.columns if col in str(c)]
-            if not cols_with_percentile:
-                print(f"No columns containing '{col}' found. Skipping this percentile.")
-                continue
-            
-            # Create a new DataFrame with only these columns
-            data = pd.DataFrame()
-            for c in cols_with_percentile:
-                tf = c[0]  # Timeframe
-                data[tf] = pivot_up[c]
+        data = pivot_tables[col]
         
         # Plot heatmap
         sns.heatmap(data, annot=True, fmt='.2f', cmap='coolwarm_r', ax=ax)
@@ -483,8 +495,40 @@ def main():
     args = parse_arguments()
     
     # Set date range
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
+    if args.end_date:
+        end_date = args.end_date
+    else:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        
+    if args.start_date:
+        start_date = args.start_date
+    else:
+        start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
+    
+    # Validate dates
+    try:
+        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        
+        # Check if end date is in the future
+        if end_dt > datetime.now():
+            print(f"Warning: End date {end_date} is in the future. Setting to today.")
+            end_date = datetime.now().strftime('%Y-%m-%d')
+            end_dt = datetime.now()
+            
+        # Check if start date is after end date
+        if start_dt > end_dt:
+            print(f"Warning: Start date {start_date} is after end date {end_date}. Swapping dates.")
+            start_date, end_date = end_date, start_date
+            start_dt, end_dt = end_dt, start_dt
+            
+        # Calculate actual days for display
+        actual_days = (end_dt - start_dt).days
+    except ValueError:
+        print(f"Warning: Invalid date format. Using default date range.")
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
+        actual_days = args.days
     
     # Parse window sizes and percentiles
     windows = [int(w) for w in args.windows.split(',')]
@@ -493,7 +537,7 @@ def main():
     
     print(f"Analyzing ETH return distribution across different timeframes")
     print(f"Data directory: {args.data_dir}")
-    print(f"Date range: {start_date} to {end_date}")
+    print(f"Date range: {start_date} to {end_date} ({actual_days} days)")
     print(f"Timeframes: {timeframes}")
     print(f"Window sizes: {windows}")
     print(f"Percentiles: {percentiles}")
