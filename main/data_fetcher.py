@@ -100,6 +100,16 @@ class DataFetcher:
         start_dt = datetime.strptime(start_date, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date, '%Y-%m-%d')
         
+        # 检查时间范围是否合理
+        days_diff = (end_dt - start_dt).days
+        if days_diff <= 0:
+            raise ValueError(f"End date ({end_dt}) must be after start date ({start_dt})")
+            
+        # 将截止日期调整为当天结束时间
+        end_dt = end_dt.replace(hour=23, minute=59, second=59)
+        
+        print(f"Downloading data for {symbol} ({timeframe}) from {start_dt} to {end_dt} ({days_diff} days)")
+        
         # Check cache first for the full date range
         start_ts = int(start_dt.timestamp() * 1000)
         end_ts = int(end_dt.timestamp() * 1000)
@@ -112,6 +122,16 @@ class DataFetcher:
         # For long date ranges, we need to fetch data in chunks
         # Calculate the maximum time range we can fetch in one request based on max_klines
         minutes_per_chunk = self.max_klines * config.TIMEFRAME_MINUTES.get(timeframe, 60)
+        
+        # 对于较长的时间范围，调整每个块的大小以适应API限制
+        if days_diff > 30 and timeframe == '1m':
+            # 对于1分钟数据，每个块最多获取8小时数据（480分钟）
+            minutes_per_chunk = min(minutes_per_chunk, 480)
+            print(f"Adjusted chunk size to {minutes_per_chunk} minutes for long-range 1m data")
+        elif days_diff > 60 and timeframe == '5m':
+            # 对于5分钟数据，每个块最多获取1天数据（1440分钟）
+            minutes_per_chunk = min(minutes_per_chunk, 1440)
+            print(f"Adjusted chunk size to {minutes_per_chunk} minutes for long-range 5m data")
         
         # Convert to timedelta
         chunk_delta = timedelta(minutes=minutes_per_chunk)
@@ -129,6 +149,11 @@ class DataFetcher:
         # Fetch data in chunks
         current_start = start_dt
         chunk_num = 1
+        max_chunks_without_progress = 5  # 如果连续多个块没有新数据，则提前退出
+        chunks_without_progress = 0
+        
+        # 使用tqdm进度条显示进度
+        pbar = tqdm(total=num_chunks, desc=f"Fetching {symbol} {timeframe}")
         
         while current_start < end_dt:
             # Calculate end of this chunk
@@ -138,7 +163,8 @@ class DataFetcher:
             current_start_ts = int(current_start.timestamp() * 1000)
             current_end_ts = int(current_end.timestamp() * 1000)
             
-            print(f"Fetching chunk {chunk_num}/{num_chunks}: {current_start.strftime('%Y-%m-%d %H:%M')} to {current_end.strftime('%Y-%m-%d %H:%M')}")
+            if chunk_num % 10 == 0 or chunk_num == 1:
+                print(f"Fetching chunk {chunk_num}/{num_chunks}: {current_start.strftime('%Y-%m-%d %H:%M')} to {current_end.strftime('%Y-%m-%d %H:%M')}")
             
             # Calculate request weight based on limit parameter
             request_weight = 1  # Default weight
@@ -184,10 +210,25 @@ class DataFetcher:
                         # Set timestamp as index
                         df.set_index('timestamp', inplace=True)
                         
-                        chunk_data = df
+                        # 检查是否获取了新数据
+                        if len(df) > 0:
+                            chunk_data = df
+                            chunks_without_progress = 0
+                        else:
+                            chunks_without_progress += 1
+                            if chunks_without_progress >= max_chunks_without_progress:
+                                print(f"No new data in {max_chunks_without_progress} consecutive chunks, skipping forward...")
+                                # 跳过一段时间以加速处理
+                                current_start = current_start + chunk_delta * 5
+                                chunks_without_progress = 0
                         break
                     else:
-                        print(f"No data returned for {symbol} on {timeframe} for this chunk")
+                        chunks_without_progress += 1
+                        if chunks_without_progress >= max_chunks_without_progress:
+                            print(f"No data in {max_chunks_without_progress} consecutive chunks, skipping forward...")
+                            # 跳过一段时间以加速处理
+                            current_start = current_start + chunk_delta * 5
+                            chunks_without_progress = 0
                         break
                         
                 except Exception as e:
@@ -202,16 +243,42 @@ class DataFetcher:
             # Append chunk data to all_data
             if not chunk_data.empty:
                 all_data = pd.concat([all_data, chunk_data])
+                if chunk_num % 10 == 0:
+                    print(f"Downloaded {len(all_data)} data points so far")
             
             # Move to next chunk
             current_start = current_end
             chunk_num += 1
+            pbar.update(1)
             
             # Add small delay between chunks
             time.sleep(0.5)
         
+        # 关闭进度条
+        pbar.close()
+        
         # Remove duplicates if any
         if not all_data.empty:
+            # 检查数据覆盖情况
+            start_date_data = all_data.index.min().strftime('%Y-%m-%d')
+            end_date_data = all_data.index.max().strftime('%Y-%m-%d')
+            data_days = (all_data.index.max() - all_data.index.min()).days
+            
+            print(f"Data covers from {start_date_data} to {end_date_data} ({data_days} days)")
+            
+            # 检查是否有大的时间间隙
+            time_diffs = all_data.index.to_series().diff()
+            max_gap = time_diffs.max().total_seconds() / 60  # 最大间隙（分钟）
+            avg_gap = time_diffs.mean().total_seconds() / 60  # 平均间隙（分钟）
+            
+            if max_gap > config.TIMEFRAME_MINUTES.get(timeframe, 60) * 5:
+                print(f"Warning: Found large time gap in data: {max_gap:.0f} minutes (avg: {avg_gap:.1f} min)")
+                
+            # 删除重复数据并排序
+            duplicates_count = all_data.index.duplicated().sum()
+            if duplicates_count > 0:
+                print(f"Removing {duplicates_count} duplicate entries")
+            
             all_data = all_data[~all_data.index.duplicated(keep='first')]
             all_data.sort_index(inplace=True)
             

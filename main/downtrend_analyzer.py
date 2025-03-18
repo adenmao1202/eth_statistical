@@ -58,8 +58,21 @@ class DowntrendAnalyzer:
         print(f"Date range: {data.index.min()} to {data.index.max()}")
         print(f"Drop threshold: {drop_threshold}, Window size: {window_size}")
         
-        # Calculate rolling percentage change
-        data['pct_change'] = data['close'].pct_change(window_size)
+        # 确定时间间隔
+        if len(data) >= 2:
+            # 计算数据点之间的平均时间间隔（以分钟为单位）
+            time_diff = data.index.to_series().diff().mean().total_seconds() / 60
+            print(f"Average time interval between data points: {time_diff:.2f} minutes")
+        else:
+            time_diff = 1  # 默认为1分钟
+            
+        # 根据时间间隔调整窗口大小
+        adjusted_window = window_size
+        # 打印调整后的窗口大小
+        print(f"Using adjusted window size: {adjusted_window} data points")
+        
+        # 计算百分比变化
+        data['pct_change'] = data['close'].pct_change(adjusted_window)
         
         # Print statistics about percentage changes
         min_pct = data['pct_change'].min()
@@ -88,9 +101,20 @@ class DowntrendAnalyzer:
                 # Start of downtrend
                 in_downtrend = True
                 start_idx = idx
-                # Find the price window_size periods ago
-                window_ago_idx = idx - pd.Timedelta(minutes=window_size)
-                start_price = data.loc[window_ago_idx]['close'] if window_ago_idx in data.index else data.iloc[0]['close']
+                # 找到adjusted_window个数据点之前的价格
+                try:
+                    # 获取当前索引位置
+                    current_pos = data.index.get_loc(idx)
+                    # 确保我们有足够的历史数据
+                    if current_pos >= adjusted_window:
+                        window_ago_pos = current_pos - adjusted_window
+                        window_ago_idx = data.index[window_ago_pos]
+                        start_price = data.loc[window_ago_idx]['close']
+                    else:
+                        start_price = data.iloc[0]['close']
+                except Exception as e:
+                    print(f"Error finding window price: {e}, using first available price")
+                    start_price = data.iloc[0]['close']
             elif in_downtrend and row['pct_change'] > drop_threshold:
                 # End of downtrend
                 in_downtrend = False
@@ -104,6 +128,9 @@ class DowntrendAnalyzer:
                 # Calculate drop percentage
                 drop_pct = ((lowest_price / start_price) - 1) * 100
                 
+                # 计算持续时间（分钟）
+                duration_minutes = (end_idx - start_idx).total_seconds() / 60
+                
                 # Add period to list
                 downtrend_periods.append({
                     'start': start_idx,
@@ -113,7 +140,7 @@ class DowntrendAnalyzer:
                     'lowest_price': lowest_price,
                     'lowest_time': lowest_idx,
                     'drop_pct': drop_pct,
-                    'duration_minutes': (end_idx - start_idx).total_seconds() / 60
+                    'duration_minutes': duration_minutes
                 })
         
         # Check if we're still in a downtrend at the end of the data
@@ -126,6 +153,9 @@ class DowntrendAnalyzer:
             # Calculate drop percentage
             drop_pct = ((lowest_price / start_price) - 1) * 100
             
+            # 计算持续时间（分钟）
+            duration_minutes = (end_idx - start_idx).total_seconds() / 60
+            
             # Add period to list
             downtrend_periods.append({
                 'start': start_idx,
@@ -135,7 +165,7 @@ class DowntrendAnalyzer:
                 'lowest_price': lowest_price,
                 'lowest_time': lowest_idx,
                 'drop_pct': drop_pct,
-                'duration_minutes': (end_idx - start_idx).total_seconds() / 60
+                'duration_minutes': duration_minutes
             })
         
         print(f"Identified {len(downtrend_periods)} downtrend periods")
@@ -532,6 +562,39 @@ class DowntrendAnalyzer:
             Dict[str, Any]: Dictionary containing analysis results
         """
         print(f"Analyzing {self.reference_symbol} downtrends on {timeframe} timeframe")
+        print(f"Time period: {start_date} to {end_date if end_date else 'now'}")
+        
+        # 验证日期格式
+        from datetime import datetime
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d') if end_date else datetime.now()
+            days_diff = (end_dt - start_dt).days
+            print(f"Analyzing data for {days_diff} days")
+            
+            if days_diff <= 0:
+                raise ValueError(f"End date ({end_dt}) must be after start date ({start_dt})")
+            if days_diff > 365:
+                print(f"Warning: Analyzing a very long period ({days_diff} days). This may take a long time.")
+                
+        except ValueError as e:
+            if "does not match format" in str(e):
+                raise ValueError(f"Invalid date format. Expected YYYY-MM-DD, got: {start_date} to {end_date}")
+            else:
+                raise e
+                
+        # 计算时间间隔设置
+        timeframe_minutes = config.TIMEFRAME_MINUTES.get(timeframe, 1)
+        expected_data_points = days_diff * 24 * 60 / timeframe_minutes
+        print(f"Expected data points: ~{int(expected_data_points)} (timeframe: {timeframe}, {timeframe_minutes} min)")
+        
+        # 根据timeframe和window_size调整窗口
+        if timeframe == '1m':
+            # 如果是1分钟时间帧，且窗口大小较小，增加窗口大小以更好地捕捉趋势
+            adjusted_window = max(window_size, 20)
+            if adjusted_window != window_size:
+                print(f"For 1m timeframe, adjusted window size from {window_size} to {adjusted_window}")
+                window_size = adjusted_window
         
         # Get data for all symbols
         all_symbols = self.correlation_analyzer.data_fetcher.get_all_futures_symbols()
@@ -546,10 +609,32 @@ class DowntrendAnalyzer:
         else:
             prioritized_symbols = usdt_symbols
         
-        # Get data for all symbols
-        data_dict = self.correlation_analyzer.data_fetcher.fetch_data_for_all_symbols(
-            prioritized_symbols, timeframe, start_date, end_date, use_cache
-        )
+        # Get data for all symbols，确保数据获取完整
+        try:
+            print(f"Fetching data for {len(prioritized_symbols)} symbols...")
+            data_dict = self.correlation_analyzer.data_fetcher.fetch_data_for_all_symbols(
+                prioritized_symbols, timeframe, start_date, end_date, use_cache
+            )
+            
+            # 检查参考符号的数据数量
+            if self.reference_symbol in data_dict:
+                ref_data = data_dict[self.reference_symbol]
+                if not ref_data.empty:
+                    data_range = f"{ref_data.index.min()} to {ref_data.index.max()}"
+                    data_days = (ref_data.index.max() - ref_data.index.min()).days
+                    data_points = len(ref_data)
+                    print(f"Got {data_points} data points for {self.reference_symbol} covering {data_days} days")
+                    print(f"Date range in data: {data_range}")
+                    
+                    # 检查获取的数据是否覆盖了大部分预期的时间范围
+                    coverage_percent = (data_points / expected_data_points) * 100 if expected_data_points > 0 else 0
+                    print(f"Data coverage: {coverage_percent:.1f}% of expected data points")
+                    
+                    if coverage_percent < 50 and expected_data_points > 1000:
+                        print(f"Warning: Low data coverage ({coverage_percent:.1f}%). Results may be incomplete.")
+        except Exception as e:
+            print(f"Error fetching data: {e}")
+            raise
         
         # Check if we have reference symbol data
         if self.reference_symbol not in data_dict or data_dict[self.reference_symbol].empty:

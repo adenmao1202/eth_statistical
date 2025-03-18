@@ -75,11 +75,13 @@ def main():
     if args.start_date:
         start_date = args.start_date
     else:
+        # 确保从足够早的日期开始
         start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
     
     end_date = args.end_date if args.end_date else datetime.now().strftime('%Y-%m-%d')
     
     print(f"Analysis period: {start_date} to {end_date}")
+    print(f"Analysis duration: {args.days} days")
     
     # Optimize request parameters if requested
     if args.optimize:
@@ -153,16 +155,22 @@ def main():
     
     if args.downtrend:
         print(f"\n=== Analyzing {args.reference_symbol} downtrends for {args.timeframe} timeframe ===")
-        print(f"Analysis period: {start_date} to {end_date}")
+        print(f"Analysis period: {start_date} to {end_date} ({args.days} days)")
         print(f"Drop threshold: {args.drop_threshold}, Window size: {args.window_size}")
         
-        # 確保使用正確的閾值
+        # 确保使用正确的閾值
         # 注意：如果用戶輸入的是-0.003，這表示-0.3%，可能需要調整
         drop_threshold = args.drop_threshold
         if abs(drop_threshold) < 0.01:
             print(f"Warning: Drop threshold {drop_threshold} seems very small.")
             print(f"This value represents {drop_threshold*100}% change.")
             print(f"If you meant {drop_threshold*100}%, continue. If you meant {drop_threshold}%, consider using {drop_threshold/100} instead.")
+        
+        # 打印timeframe相关的配置信息
+        timeframe_minutes = config.TIMEFRAME_MINUTES.get(args.timeframe, 1)
+        print(f"Timeframe: {args.timeframe} ({timeframe_minutes} minutes)")
+        estimated_data_points = (datetime.strptime(end_date, '%Y-%m-%d') - datetime.strptime(start_date, '%Y-%m-%d')).days * 24 * 60 / timeframe_minutes
+        print(f"Estimated data points: ~{int(estimated_data_points)}")
         
         try:
             results = downtrend_analyzer.analyze_downtrends(
