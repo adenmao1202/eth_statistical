@@ -12,7 +12,9 @@ import json
 import pickle
 import hashlib
 import random
-from typing import Optional, List, Any
+from typing import Optional, List, Any, Dict, Tuple
+import pandas as pd
+import scipy.stats as stats
 
 import config
 
@@ -151,58 +153,60 @@ class CacheManager:
         Returns:
             str: Cache key
         """
-        key_data = f"{symbol}_{timeframe}_{start_str}_{end_str}_{max_klines}"
-        return hashlib.md5(key_data.encode()).hexdigest()
+        key_str = f"{symbol}_{timeframe}_{start_str}_{end_str}_{max_klines}"
+        return hashlib.md5(key_str.encode()).hexdigest()
     
     def save(self, cache_key: str, data: Any) -> None:
         """
-        Save data to a cache file
+        Save data to cache
         
         Args:
             cache_key (str): Cache key
             data (Any): Data to save
         """
-        cache_file = f"{self.cache_dir}/{cache_key}.pkl"
-        cache_meta = f"{self.cache_dir}/{cache_key}.meta"
-        
-        # Save data
-        with open(cache_file, 'wb') as f:
-            pickle.dump(data, f)
-        
-        # Save metadata
-        meta = {
-            'timestamp': time.time(),
-            'symbol': data.index.name if hasattr(data, 'index') and data.index.name else None
-        }
-        with open(cache_meta, 'w') as f:
-            json.dump(meta, f)
+        try:
+            cache_file = os.path.join(self.cache_dir, f"{cache_key}.pkl")
+            with open(cache_file, 'wb') as f:
+                pickle.dump({
+                    'timestamp': time.time(),
+                    'data': data
+                }, f)
+        except Exception as e:
+            print(f"Error saving to cache: {e}")
     
     def load(self, cache_key: str) -> Optional[Any]:
         """
-        Load data from cache if it exists and is not expired
+        Load data from cache
         
         Args:
             cache_key (str): Cache key
             
         Returns:
-            Optional[Any]: Cached data, or None if not found or expired
+            Optional[Any]: Cached data or None if not found or expired
         """
-        cache_file = f"{self.cache_dir}/{cache_key}.pkl"
-        cache_meta = f"{self.cache_dir}/{cache_key}.meta"
-        
-        if not (os.path.exists(cache_file) and os.path.exists(cache_meta)):
+        try:
+            cache_file = os.path.join(self.cache_dir, f"{cache_key}.pkl")
+            if not os.path.exists(cache_file):
+                return None
+            
+            # Check if cache is expired
+            if time.time() - os.path.getmtime(cache_file) > self.cache_expiry:
+                # Cache is expired, remove it
+                os.remove(cache_file)
+                return None
+            
+            with open(cache_file, 'rb') as f:
+                cached = pickle.load(f)
+            
+            # Check if data in cache is expired
+            if time.time() - cached['timestamp'] > self.cache_expiry:
+                os.remove(cache_file)
+                return None
+            
+            return cached['data']
+        except Exception as e:
+            print(f"Error loading from cache: {e}")
             return None
-        
-        # Check if cache is expired
-        with open(cache_meta, 'r') as f:
-            meta = json.load(f)
-        
-        if time.time() - meta['timestamp'] > self.cache_expiry:
-            return None  # Cache expired
-        
-        # Load data from cache
-        with open(cache_file, 'rb') as f:
-            return pickle.load(f)
 
 
 class ProxyManager:
@@ -221,65 +225,37 @@ class ProxyManager:
     
     def get_proxy(self) -> Optional[str]:
         """
-        Get a random proxy from the proxy list
+        Get a random proxy from the list
         
         Returns:
-            Optional[str]: Random proxy URL, or None if not using proxies
+            Optional[str]: Proxy URL or None if not using proxies or no proxies available
         """
         if not self.use_proxies or not self.proxies:
             return None
         return random.choice(self.proxies)
 
 
-def calculate_optimal_batch_size(rate_limiter: RateLimiter, remaining_symbols: int, 
-                                timeframe: str, max_klines: int, max_workers: int) -> int:
+def calculate_optimal_batch_size(remaining_symbols: int, 
+                               max_workers: int) -> int:
     """
-    Calculate the optimal batch size based on current rate limit usage and timeframe
+    Calculate optimal batch size for data fetching
     
     Args:
-        rate_limiter (RateLimiter): Rate limiter instance
-        remaining_symbols (int): Number of symbols remaining to process
-        timeframe (str): Timeframe being processed
-        max_klines (int): Maximum number of klines
-        max_workers (int): Maximum number of worker threads
+        remaining_symbols (int): Number of remaining symbols to fetch
+        max_workers (int): Maximum number of concurrent workers
         
     Returns:
         int: Optimal batch size
     """
-    # Calculate remaining weight capacity
-    remaining_weight = config.MAX_WEIGHT_PER_MINUTE - rate_limiter.weight_used
+    # No need for a batch if remaining symbols is less than max workers
+    if remaining_symbols <= max_workers:
+        return remaining_symbols
     
-    # Estimate weight per request based on timeframe and max_klines
-    request_weight = 1  # Default weight
-    if max_klines > 100:
-        if max_klines <= 500:
-            request_weight = 2
-        elif max_klines <= 1000:
-            request_weight = 5
-        else:
-            request_weight = 10
-            
-    # Calculate how many requests we can make with remaining weight
-    max_possible_requests = max(1, remaining_weight // request_weight)
+    # Use at least 1 batch
+    batch_size = min(remaining_symbols, max_workers)
     
-    # Consider time remaining in current minute
-    time_remaining = max(0.1, rate_limiter.weight_reset_time - time.time())
-    requests_per_second = config.MAX_REQUESTS_PER_SECOND
-    
-    # Calculate how many requests we can make in the remaining time
-    max_time_based_requests = int(time_remaining * requests_per_second * 0.8)  # 80% to ensure safety
-    
-    # Take the minimum of weight-based and time-based limits
-    max_requests = min(max_possible_requests, max_time_based_requests)
-    
-    # Consider max_workers setting
-    max_workers_limit = min(max_workers, remaining_symbols)
-    
-    # Calculate final batch size
-    optimal_batch_size = min(max_requests, max_workers_limit, remaining_symbols)
-    
-    # Ensure batch size is at least 1 but not more than 20 (to avoid overwhelming the API)
-    return max(1, min(20, optimal_batch_size))
+    # Ensure batch size is reasonable
+    return max(1, min(batch_size, 20))  # Cap at 20 to avoid overwhelming the API
 
 
 def optimize_request_parameters(days: int, timeframe: str, use_cache: bool = True) -> dict:
@@ -288,53 +264,232 @@ def optimize_request_parameters(days: int, timeframe: str, use_cache: bool = Tru
     
     Args:
         days (int): Number of days to analyze
-        timeframe (str): Timeframe for analysis
-        use_cache (bool): Whether to use cached data
+        timeframe (str): Timeframe
+        use_cache (bool): Whether to use cache
         
     Returns:
-        dict: Dictionary containing optimized parameters
+        dict: Optimized parameters
     """
-    # Calculate optimal max_klines based on timeframe and days
-    # Calculate total minutes needed
-    total_minutes = days * 24 * 60
+    # Base parameters
+    max_klines = config.DEFAULT_MAX_KLINES
+    request_delay = config.DEFAULT_REQUEST_DELAY
+    max_workers = config.DEFAULT_MAX_WORKERS
     
-    # Calculate how many candles we need
-    candles_needed = total_minutes / config.TIMEFRAME_MINUTES.get(timeframe, 60)
-    
-    # Determine optimal max_klines (keeping within API limits)
-    if candles_needed <= 100:
-        optimal_max_klines = 100  # Weight: 1
-    elif candles_needed <= 500:
-        optimal_max_klines = min(500, candles_needed)  # Weight: 2
-    elif candles_needed <= 1000:
-        optimal_max_klines = min(1000, candles_needed)  # Weight: 5
+    # Adjust based on timeframe and duration
+    if timeframe == '1m':
+        if days > 30:
+            # Smaller batches, slower requests for longer periods
+            max_klines = 500
+            request_delay = 1.0
+            max_workers = 3
+        else:
+            # Larger batches, faster requests for shorter periods
+            max_klines = 1000
+            request_delay = 0.5
+            max_workers = 5
+    elif timeframe == '5m':
+        if days > 60:
+            max_klines = 750
+            request_delay = 0.8
+            max_workers = 4
+        else:
+            max_klines = 1000
+            request_delay = 0.5
+            max_workers = 5
     else:
-        # For very large requests, we need to make multiple calls
-        # Limit to 1000 to keep weight at 5
-        optimal_max_klines = 1000
+        # For larger timeframes, use maximum efficiency
+        max_klines = 1000
+        request_delay = 0.25
+        max_workers = 8
     
-    # Determine optimal request delay based on symbol count and cache usage
+    # If using cache, we can be more aggressive
     if use_cache:
-        # We can be more aggressive if using cache
-        optimal_request_delay = 0.2
-    else:
-        # More conservative if not using cache
-        optimal_request_delay = 0.5
+        request_delay = max(0.1, request_delay / 2)
+        max_workers = min(10, max_workers * 2)
     
-    # Determine optimal max_workers based on system resources
-    cpu_count = os.cpu_count() or 4
-    optimal_max_workers = min(10, max(2, cpu_count - 1))
-    
-    optimized_params = {
-        'max_klines': int(optimal_max_klines),
-        'request_delay': optimal_request_delay,
-        'max_workers': optimal_max_workers
+    return {
+        'max_klines': max_klines,
+        'request_delay': request_delay,
+        'max_workers': max_workers
     }
+
+def calculate_abnormal_returns(coin_data: Dict[str, pd.DataFrame], 
+                              event_periods: List[Dict[str, Any]], 
+                              window_minutes: int) -> Dict[str, List[float]]:
+    """
+    Calculate abnormal returns for coins during event periods
     
-    print("\n=== Optimized Request Parameters ===")
-    print(f"Max klines: {optimized_params['max_klines']} (based on {days} days of {timeframe} data)")
-    print(f"Request delay: {optimized_params['request_delay']} seconds")
-    print(f"Max workers: {optimized_params['max_workers']}")
-    print("====================================\n")
+    Args:
+        coin_data (Dict[str, pd.DataFrame]): Dictionary of coin data
+        event_periods (List[Dict[str, Any]]): List of event periods
+        window_minutes (int): Window size in minutes
+        
+    Returns:
+        Dict[str, List[float]]: Dictionary of abnormal returns for each coin
+    """
+    abnormal_returns = {}
     
-    return optimized_params 
+    for symbol, df in coin_data.items():
+        if symbol != config.DEFAULT_REFERENCE_SYMBOL:  # Skip reference symbol
+            abnormal_returns[symbol] = []
+            
+            for period in event_periods:
+                start_time = period['start']
+                end_time = period['end']
+                
+                # Get data for the event window
+                window_data = df[(df.index >= start_time) & (df.index <= end_time)]
+                
+                if not window_data.empty:
+                    # Calculate percentage return during the window
+                    start_price = window_data.iloc[0]['close']
+                    end_price = window_data.iloc[-1]['close']
+                    pct_return = (end_price / start_price - 1) * 100
+                    
+                    abnormal_returns[symbol].append(pct_return)
+    
+    return abnormal_returns
+
+def calculate_optimal_batch_size_for_fetching(interval: str, days: int, max_klines: int) -> int:
+    """
+    Calculate optimal batch size for fetching historical data based on timeframe
+    
+    Args:
+        interval (str): Kline interval (e.g., '1m', '1h')
+        days (int): Number of days to fetch
+        max_klines (int): Maximum number of klines per request
+        
+    Returns:
+        int: Optimal batch size in minutes
+    """
+    # Get interval in minutes
+    interval_minutes = config.TIMEFRAME_MINUTES.get(interval, 1)
+    
+    # Calculate total number of candles
+    total_minutes = days * 24 * 60
+    total_candles = total_minutes // interval_minutes
+    
+    # Calculate number of batches needed
+    num_batches = (total_candles + max_klines - 1) // max_klines
+    
+    # Calculate batch size in minutes
+    batch_size = total_minutes // max(1, num_batches)
+    
+    # Ensure reasonable batch size (between 60 minutes and 24 hours)
+    return max(60, min(batch_size, 24 * 60))
+
+def calculate_sample_size_requirement(effect_size: float = 0.5, 
+                                     alpha: float = 0.05, 
+                                     power: float = 0.8) -> int:
+    """
+    计算基于t检验所需的最小样本量
+    
+    参数:
+        effect_size (float): 预期效应大小 (Cohen's d)
+        alpha (float): 显著性水平 (Type I error)
+        power (float): 检验功效 (1 - Type II error)
+        
+    返回:
+        int: 需要的最小样本量
+    """
+    # 计算临界t值（双尾检验）
+    t_crit = stats.t.ppf(1 - alpha/2, 100)  # 自由度初始设为100
+    
+    # 非中心参数
+    delta = effect_size
+    
+    # 迭代查找样本量
+    for n in range(4, 1000):  # 从4开始（最小合理样本）
+        # 更新自由度和临界t值
+        df = n - 1
+        t_crit = stats.t.ppf(1 - alpha/2, df)
+        
+        # 计算特定样本量下的检验功效
+        ncp = delta * (n**0.5)  # 非中心参数
+        actual_power = 1 - stats.nct.cdf(t_crit, df, ncp)
+        
+        # 如果达到所需功效，返回样本量
+        if actual_power >= power:
+            return n
+    
+    return 1000  # 如果迭代结束仍未达到功效，返回上限
+
+def analyze_sample_adequacy(observed_effect: float, current_sample_size: int, 
+                           p_value: float, alpha: float = 0.05) -> dict:
+    """
+    分析当前样本量是否足够，并估计达到显著性所需的样本量
+    
+    参数:
+        observed_effect (float): 观察到的效应（如平均异常收益）
+        current_sample_size (int): 当前样本大小
+        p_value (float): 当前p值
+        alpha (float): 显著性水平
+        
+    返回:
+        dict: 样本充分性分析结果
+    """
+    # 计算当前效应大小 (Cohen's d)
+    # 由于我们只有t统计量，可以从t和样本量估算d
+    t_stat = stats.t.ppf(1 - p_value/2, current_sample_size - 1)
+    
+    # Cohen's d = t / sqrt(n)
+    cohen_d = abs(t_stat / (current_sample_size ** 0.5))
+    
+    # 计算在相同效应大小下，达到显著性所需的样本量
+    for power in [0.8, 0.9, 0.95]:
+        required_n = calculate_sample_size_requirement(
+            effect_size=cohen_d,
+            alpha=alpha,
+            power=power
+        )
+        
+        # 如果所需样本量非常大，可能意味着效应非常小
+        if required_n > 1000:
+            required_n = ">1000"
+    
+    # 返回分析结果
+    return {
+        "current_sample_size": current_sample_size,
+        "observed_effect": observed_effect,
+        "estimated_effect_size": cohen_d,
+        "p_value": p_value,
+        "significant": p_value < alpha,
+        "required_sample_size_80power": calculate_sample_size_requirement(cohen_d, alpha, 0.8),
+        "required_sample_size_90power": calculate_sample_size_requirement(cohen_d, alpha, 0.9),
+        "required_sample_size_95power": calculate_sample_size_requirement(cohen_d, alpha, 0.95)
+    }
+
+def calculate_effect_size(mean_difference, std_dev):
+    """
+    計算效應大小 (Cohen's d) 並給出解釋
+
+    Parameters:
+    -----------
+    mean_difference : float
+        平均差異
+    std_dev : float
+        標準差
+
+    Returns:
+    --------
+    tuple
+        (效應大小, 效應大小解釋)
+    """
+    # 避免除以零
+    if std_dev == 0:
+        return 0, "無法計算"
+    
+    # 計算Cohen's d
+    effect_size = mean_difference / std_dev
+    
+    # 解釋效應大小
+    if abs(effect_size) < 0.2:
+        effect_interpretation = "微小"
+    elif abs(effect_size) < 0.5:
+        effect_interpretation = "小"
+    elif abs(effect_size) < 0.8:
+        effect_interpretation = "中等" 
+    else:
+        effect_interpretation = "大"
+    
+    return effect_size, effect_interpretation 

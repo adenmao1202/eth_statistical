@@ -2,241 +2,287 @@
 # -*- coding: utf-8 -*-
 
 """
-Main Module
-Entry point for the cryptocurrency analysis tool
+ETH Statistical Analysis Framework
+Main entry point for all three research components:
+1. Event Study
+2. Clustering Analysis
+3. Hypothesis Testing
 """
 
 import os
 import argparse
+import sys
+import json
+import shutil
 from datetime import datetime, timedelta
+from rich.console import Console
+from rich.panel import Panel
+from rich.markdown import Markdown
 
-import config
-from data_fetcher import DataFetcher
-from analyzer import CorrelationAnalyzer
-from downtrend_analyzer import DowntrendAnalyzer
+# 初始化rich控制台
+console = Console()
 
+def print_header():
+    """打印歡迎頭部信息"""
+    header_panel = Panel(
+        """[bold cyan]ETH 統計分析框架[/bold cyan]
+
+[green]1.[/green] 事件研究: ETH價格下跌對其他加密貨幣的影響
+[green]2.[/green] 聚類分析: 基於XGBoost的加密貨幣聚類
+[green]3.[/green] 假設檢驗: 收益分佈分析""",
+        border_style="blue",
+        expand=False
+    )
+    console.print(header_panel)
+
+def print_usage():
+    """打印使用說明"""
+    usage_md = """
+# 使用說明
+
+## 基本用法
+```bash
+python3 main.py --run [module_name] [options]
+```
+
+## 可用模塊
+- `event_study`: 事件研究分析
+- `clustering`: 加密貨幣聚類分析
+- `hypothesis_testing`: 假設檢驗分析
+- `cache_info`: 顯示緩存信息
+- `clean_cache`: 清理過期緩存
+
+## 常用選項
+- `--timeframe`: 時間框架 (1m, 5m, 15m, 1h, 4h)
+- `--days`: 分析天數
+- `--drop_threshold`: ETH下跌閾值
+- `--no_cache`: 禁用緩存
+- `--request_delay`: API請求延遲
+
+## 範例
+```bash
+# 運行事件研究
+python3 main.py --run event_study --timeframe 1m --days 30 --drop_threshold -0.01
+
+# 運行聚類分析
+python3 main.py --run clustering --timeframe 1h --days 90 --clusters 5
+
+# 運行假設檢驗
+python3 main.py --run hypothesis_testing --timeframe 1m --days 60 --pre_event_window 30 --post_event_window 30
+```
+"""
+    console.print(Markdown(usage_md))
 
 def parse_arguments():
-    """Parse command line arguments"""
-    parser = argparse.ArgumentParser(description='Cryptocurrency Correlation and Downtrend Analysis Tool')
+    """解析命令行參數"""
+    parser = argparse.ArgumentParser(description='ETH 統計分析框架')
     
-    # Data fetching parameters
-    parser.add_argument('--api_key', type=str, help='Binance API key')
-    parser.add_argument('--api_secret', type=str, help='Binance API secret')
-    parser.add_argument('--max_klines', type=int, default=config.DEFAULT_MAX_KLINES, 
-                        help=f'Maximum number of klines to fetch (default: {config.DEFAULT_MAX_KLINES})')
-    parser.add_argument('--request_delay', type=float, default=config.DEFAULT_REQUEST_DELAY, 
-                        help=f'Delay between API requests in seconds (default: {config.DEFAULT_REQUEST_DELAY})')
-    parser.add_argument('--max_workers', type=int, default=config.DEFAULT_MAX_WORKERS, 
-                        help=f'Maximum number of concurrent workers (default: {config.DEFAULT_MAX_WORKERS})')
-    parser.add_argument('--use_proxies', action='store_true', help='Use proxy rotation for API requests')
-    parser.add_argument('--proxies', type=str, nargs='+', help='List of proxy URLs')
-    parser.add_argument('--cache_expiry', type=int, default=config.DEFAULT_CACHE_EXPIRY, 
-                        help=f'Cache expiry time in seconds (default: {config.DEFAULT_CACHE_EXPIRY})')
+    # 主要命令選項
+    parser.add_argument('--run', type=str, required=True, 
+                       choices=['event_study', 'clustering', 'hypothesis_testing', 'cache_info', 'clean_cache'],
+                       help='要運行的分析模塊')
     
-    # Analysis parameters
-    parser.add_argument('--reference_symbol', type=str, default=config.DEFAULT_REFERENCE_SYMBOL, 
-                        help=f'Reference trading pair symbol (default: {config.DEFAULT_REFERENCE_SYMBOL})')
-    parser.add_argument('--timeframe', type=str, default='1h', choices=config.TIMEFRAMES.keys(),
-                        help=f'Timeframe for analysis (default: 1h)')
-    parser.add_argument('--days', type=int, default=30, 
-                        help='Number of days to analyze (default: 30)')
-    parser.add_argument('--start_date', type=str, 
-                        help='Start date in YYYY-MM-DD format (default: days ago from today)')
-    parser.add_argument('--end_date', type=str, 
-                        help='End date in YYYY-MM-DD format (default: today)')
-    parser.add_argument('--top_n', type=int, default=config.DEFAULT_TOP_N, 
-                        help=f'Number of top results to display (default: {config.DEFAULT_TOP_N})')
-    parser.add_argument('--window_size', type=int, default=config.DEFAULT_WINDOW_SIZE, 
-                        help=f'Window size for calculations (default: {config.DEFAULT_WINDOW_SIZE})')
-    parser.add_argument('--drop_threshold', type=float, default=config.DEFAULT_DROP_THRESHOLD, 
-                        help=f'Threshold for identifying significant drops (default: {config.DEFAULT_DROP_THRESHOLD})')
+    # 通用數據獲取參數
+    parser.add_argument('--api_key', type=str, help='Binance API密鑰')
+    parser.add_argument('--api_secret', type=str, help='Binance API密碼')
+    parser.add_argument('--request_delay', type=float, help='API請求延遲（秒）')
+    parser.add_argument('--no_cache', action='store_true', help='禁用緩存')
+    parser.add_argument('--force_clean', action='store_true', help='強制清理所有緩存文件')
     
-    # Analysis modes
-    parser.add_argument('--correlation', action='store_true', help='Perform correlation analysis')
-    parser.add_argument('--downtrend', action='store_true', help='Perform downtrend analysis')
-    parser.add_argument('--all_timeframes', action='store_true', help='Analyze all timeframes')
-    parser.add_argument('--no_cache', action='store_true', help='Disable cache usage')
+    # 通用分析參數
+    parser.add_argument('--days', type=int, help='分析天數')
+    parser.add_argument('--timeframe', type=str, help='分析時間框架 (1m, 5m, 15m, 1h, 4h)')
+    parser.add_argument('--top_n', type=int, help='分析排名前N的幣種')
+    parser.add_argument('--start_date', type=str, help='開始日期 (YYYY-MM-DD)')
+    parser.add_argument('--end_date', type=str, help='結束日期 (YYYY-MM-DD)')
     
-    # Optimization
-    parser.add_argument('--optimize', action='store_true', 
-                        help='Optimize request parameters based on analysis needs')
-    parser.add_argument('--track_api_usage', action='store_true', 
-                        help='Track and display API usage statistics')
+    # 事件研究和假設檢驗特定參數
+    parser.add_argument('--drop_threshold', type=float, help='ETH下跌閾值 (負數)')
+    parser.add_argument('--pre_event_window', type=int, help='事件前窗口（分鐘）')
+    parser.add_argument('--post_event_window', type=int, help='事件後窗口（分鐘）')
+    parser.add_argument('--window_size', type=int, help='檢測窗口大小')
+    
+    # 聚類分析特定參數
+    parser.add_argument('--clusters', type=int, help='聚類數量')
+    parser.add_argument('--corr_threshold', type=float, help='相關性閾值')
     
     return parser.parse_args()
 
-
-def main():
-    """Main function"""
-    args = parse_arguments()
-    
-    # Set up dates
-    if args.start_date:
-        start_date = args.start_date
-    else:
-        # 确保从足够早的日期开始
-        start_date = (datetime.now() - timedelta(days=args.days)).strftime('%Y-%m-%d')
-    
-    end_date = args.end_date if args.end_date else datetime.now().strftime('%Y-%m-%d')
-    
-    print(f"Analysis period: {start_date} to {end_date}")
-    print(f"Analysis duration: {args.days} days")
-    
-    # Optimize request parameters if requested
-    if args.optimize:
-        from utils import optimize_request_parameters
-        optimized_params = optimize_request_parameters(args.days, args.timeframe, not args.no_cache)
-        max_klines = optimized_params['max_klines']
-        request_delay = optimized_params['request_delay']
-        max_workers = optimized_params['max_workers']
-    else:
-        max_klines = args.max_klines
-        request_delay = args.request_delay
-        max_workers = args.max_workers
-    
-    # Initialize data fetcher
-    data_fetcher = DataFetcher(
-        api_key=args.api_key,
-        api_secret=args.api_secret,
-        max_klines=max_klines,
-        request_delay=request_delay,
-        max_workers=max_workers,
-        use_proxies=args.use_proxies,
-        proxies=args.proxies,
-        cache_expiry=args.cache_expiry
-    )
-    
-    # Initialize analyzers
-    correlation_analyzer = CorrelationAnalyzer(data_fetcher, args.reference_symbol)
-    downtrend_analyzer = DowntrendAnalyzer(correlation_analyzer)
-    
-    # Perform requested analyses
-    if args.all_timeframes and args.correlation:
-        print("\n=== Analyzing correlations across all timeframes ===")
-        results = correlation_analyzer.analyze_all_timeframes(
-            start_date=start_date,
-            end_date=end_date,
-            top_n=args.top_n,
-            use_cache=not args.no_cache
-        )
-        
-        # Create correlation heatmap
-        correlation_analyzer.create_correlation_heatmap(results, args.top_n)
-    
-    elif args.correlation:
-        print(f"\n=== Analyzing correlations for {args.timeframe} timeframe ===")
-        # Get all symbols
-        all_symbols = data_fetcher.get_all_futures_symbols()
-        usdt_symbols = [s for s in all_symbols if s.endswith('USDT')]
-        if args.reference_symbol not in usdt_symbols:
-            usdt_symbols.append(args.reference_symbol)
-        
-        # Prioritize reference symbol
-        if args.reference_symbol in usdt_symbols:
-            usdt_symbols.remove(args.reference_symbol)
-            prioritized_symbols = [args.reference_symbol] + usdt_symbols
-        else:
-            prioritized_symbols = usdt_symbols
-        
-        # Get data for all symbols
-        data = data_fetcher.fetch_data_for_all_symbols(
-            prioritized_symbols, args.timeframe, start_date, end_date, not args.no_cache
-        )
-        
-        # Calculate correlations
-        correlation = correlation_analyzer.calculate_correlation(data, args.reference_symbol)
-        
-        # Save correlations to CSV
-        correlation.to_csv(f'correlation_{args.timeframe}.csv')
-        
-        # Visualize correlations
-        correlation_analyzer.visualize_correlation(correlation, args.timeframe, args.top_n)
-    
-    if args.downtrend:
-        print(f"\n=== Analyzing {args.reference_symbol} downtrends for {args.timeframe} timeframe ===")
-        print(f"Analysis period: {start_date} to {end_date} ({args.days} days)")
-        print(f"Drop threshold: {args.drop_threshold}, Window size: {args.window_size}")
-        
-        # 确保使用正确的閾值
-        # 注意：如果用戶輸入的是-0.003，這表示-0.3%，可能需要調整
-        drop_threshold = args.drop_threshold
-        if abs(drop_threshold) < 0.01:
-            print(f"Warning: Drop threshold {drop_threshold} seems very small.")
-            print(f"This value represents {drop_threshold*100}% change.")
-            print(f"If you meant {drop_threshold*100}%, continue. If you meant {drop_threshold}%, consider using {drop_threshold/100} instead.")
-        
-        # 打印timeframe相关的配置信息
-        timeframe_minutes = config.TIMEFRAME_MINUTES.get(args.timeframe, 1)
-        print(f"Timeframe: {args.timeframe} ({timeframe_minutes} minutes)")
-        estimated_data_points = (datetime.strptime(end_date, '%Y-%m-%d') - datetime.strptime(start_date, '%Y-%m-%d')).days * 24 * 60 / timeframe_minutes
-        print(f"Estimated data points: ~{int(estimated_data_points)}")
-        
-        try:
-            results = downtrend_analyzer.analyze_downtrends(
-                timeframe=args.timeframe,
-                start_date=start_date,
-                end_date=end_date,
-                drop_threshold=drop_threshold,
-                window_size=args.window_size,
-                top_n=args.top_n,
-                use_cache=not args.no_cache
+def execute_module(module_name, args):
+    """執行指定的分析模塊"""
+    try:
+        if module_name == 'event_study':
+            # 使用sys.path添加路徑而不是動態導入包
+            event_study_path = os.path.join(os.path.dirname(__file__), 'event_study')
+            sys.path.insert(0, event_study_path)
+            
+            # 修改命令行參數
+            original_argv = sys.argv
+            sys.argv = [sys.argv[0]] + [arg for arg in sys.argv[2:]]
+            
+            # 導入並執行
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("event_study_main", os.path.join(event_study_path, "main.py"))
+            event_study_main = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(event_study_main)
+            event_study_main.main()
+            
+            # 恢復原始參數
+            sys.argv = original_argv
+            sys.path.pop(0)
+            
+        elif module_name == 'clustering':
+            # 使用sys.path添加路徑而不是動態導入包
+            clustering_path = os.path.join(os.path.dirname(__file__), 'clustering')
+            sys.path.insert(0, clustering_path)
+            
+            # 修改命令行參數
+            original_argv = sys.argv
+            sys.argv = [sys.argv[0]] + [arg for arg in sys.argv[2:]]
+            
+            # 導入並執行
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("clustering_main", os.path.join(clustering_path, "main.py"))
+            clustering_main = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(clustering_main)
+            clustering_main.main()
+            
+            # 恢復原始參數
+            sys.argv = original_argv
+            sys.path.pop(0)
+            
+        elif module_name == 'hypothesis_testing':
+            # 使用sys.path添加路徑而不是動態導入包
+            hypothesis_path = os.path.join(os.path.dirname(__file__), 'hypothesis_testing')
+            sys.path.insert(0, hypothesis_path)
+            
+            # 修改命令行參數
+            original_argv = sys.argv
+            sys.argv = [sys.argv[0]] + [arg for arg in sys.argv[2:]]
+            
+            # 導入並執行
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("hypothesis_main", os.path.join(hypothesis_path, "main.py"))
+            hypothesis_main = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(hypothesis_main)
+            hypothesis_main.main()
+            
+            # 恢復原始參數
+            sys.argv = original_argv
+            sys.path.pop(0)
+            
+        elif module_name in ['cache_info', 'clean_cache']:
+            # 導入數據獲取器
+            from data_fetcher import DataFetcher
+            
+            data_fetcher = DataFetcher(
+                api_key=args.api_key,
+                api_secret=args.api_secret,
+                request_delay=args.request_delay
             )
             
-            # 如果沒有找到下跌趨勢，提供建議
-            if len(results.get('downtrend_periods', [])) == 0:
-                print("\n=== No downtrend periods found. Suggestions: ===")
-                print("1. Try a less extreme drop threshold (e.g., -0.01 for -1%)")
-                print("2. Try a different timeframe (e.g., 15m, 1h)")
-                print("3. Try a different window size (e.g., 10, 30)")
-                print("4. Check if the date range contains significant market movements")
+            if module_name == 'cache_info':
+                display_cache_info(data_fetcher)
+            else:
+                clean_cache(data_fetcher, args.force_clean)
                 
-                # 運行return_dist.py來獲取建議的參數
-                print("\nConsider running return_dist.py to get recommended parameters:")
-                print("python return_dist.py --symbol ETHUSDT --timeframe 1m --days 180")
-        except Exception as e:
-            print(f"Error during downtrend analysis: {e}")
-            import traceback
-            traceback.print_exc()
-            print("\nTry adjusting parameters or check the data availability for the specified period.")
+    except KeyboardInterrupt:
+        console.print("[bold red]程序被用户中断[/bold red]")
+        sys.exit(0)
+    except Exception as e:
+        console.print(f"[bold red]執行時錯誤: {str(e)}[/bold red]")
+        import traceback
+        console.print(traceback.format_exc())
+        sys.exit(1)
+
+def display_cache_info(data_fetcher):
+    """顯示緩存統計信息"""
+    cache_stats = data_fetcher.get_cache_stats()
     
-    # If no analysis mode specified, run correlation analysis
-    if not (args.correlation or args.downtrend):
-        print("\n=== Running default correlation analysis ===")
-        # Get all symbols
-        all_symbols = data_fetcher.get_all_futures_symbols()
-        usdt_symbols = [s for s in all_symbols if s.endswith('USDT')]
-        if args.reference_symbol not in usdt_symbols:
-            usdt_symbols.append(args.reference_symbol)
+    console.print(Panel(
+        f"""[bold cyan]緩存統計信息[/bold cyan]
         
-        # Prioritize reference symbol
-        if args.reference_symbol in usdt_symbols:
-            usdt_symbols.remove(args.reference_symbol)
-            prioritized_symbols = [args.reference_symbol] + usdt_symbols
+[green]緩存文件總數:[/green] {cache_stats.get('total_files', 'N/A')} 個
+[green]緩存總大小:[/green] {cache_stats.get('total_size_mb', 0):.2f} MB
+[green]過期文件數量:[/green] {cache_stats.get('expired_files', 'N/A')} 個
+[green]緩存有效期:[/green] {cache_stats.get('cache_expiry_days', 'N/A')} 天
+[green]緩存目錄:[/green] {cache_stats.get('cache_dir', 'N/A')}
+""",
+        border_style="blue",
+        expand=False
+    ))
+    
+    # 如果有最新和最舊的緩存，顯示它們的信息
+    newest = cache_stats.get('newest_cache')
+    oldest = cache_stats.get('oldest_cache')
+    
+    if newest:
+        console.print(f"[green]最新緩存文件:[/green] {os.path.basename(newest['path'])}")
+        console.print(f"[green]修改時間:[/green] {newest['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"[green]文件大小:[/green] {newest['size'] / 1024:.2f} KB")
+    
+    if oldest:
+        console.print(f"\n[yellow]最舊緩存文件:[/yellow] {os.path.basename(oldest['path'])}")
+        console.print(f"[yellow]修改時間:[/yellow] {oldest['modified'].strftime('%Y-%m-%d %H:%M:%S')}")
+        console.print(f"[yellow]文件大小:[/yellow] {oldest['size'] / 1024:.2f} KB")
+
+def clean_cache(data_fetcher, force_clean=False):
+    """清理緩存"""
+    result = data_fetcher.clean_expired_cache(force_clean)
+    
+    if 'error' in result:
+        console.print(f"[bold red]緩存清理失敗: {result['error']}[/bold red]")
+    else:
+        if force_clean:
+            console.print(f"[bold green]強制清理完成！[/bold green]")
         else:
-            prioritized_symbols = usdt_symbols
+            console.print(f"[bold green]過期緩存清理完成！[/bold green]")
         
-        # Get data for all symbols
-        data = data_fetcher.fetch_data_for_all_symbols(
-            prioritized_symbols, args.timeframe, start_date, end_date, not args.no_cache
-        )
-        
-        # Calculate correlations
-        correlation = correlation_analyzer.calculate_correlation(data, args.reference_symbol)
-        
-        # Save correlations to CSV
-        correlation.to_csv(f'correlation_{args.timeframe}.csv')
-        
-        # Visualize correlations
-        correlation_analyzer.visualize_correlation(correlation, args.timeframe, args.top_n)
-    
-    # Track API usage if requested
-    if args.track_api_usage:
-        data_fetcher.rate_limiter.track_usage(show_details=True)
-    
-    print("\n=== Analysis complete ===")
-    print(f"Results saved to current directory")
+        console.print(f"[green]移除文件數:[/green] {result['removed_files']}")
+        console.print(f"[green]釋放空間:[/green] {result['reclaimed_space_mb']:.2f} MB")
 
+def clean_up_project():
+    """清理項目中不需要的文件和目錄"""
+    # 刪除根目錄下的舊文件和目錄
+    old_dirs = ['eth_dist', 'old', 'coins', 'corr']
+    
+    for dir_name in old_dirs:
+        if os.path.exists(dir_name):
+            try:
+                shutil.rmtree(dir_name)
+                console.print(f"[green]已刪除舊目錄: {dir_name}[/green]")
+            except Exception as e:
+                console.print(f"[red]無法刪除目錄 {dir_name}: {str(e)}[/red]")
+    
+    # 移動根目錄下的historical_data到main目錄
+    if os.path.exists('historical_data') and not os.path.exists('main/historical_data'):
+        try:
+            shutil.move('historical_data', 'main/historical_data')
+            console.print("[green]已移動historical_data目錄到main目錄下[/green]")
+        except Exception as e:
+            console.print(f"[red]無法移動historical_data目錄: {str(e)}[/red]")
+    
+    # 更新根目錄的README.md
+    if os.path.exists('README.md') and os.path.exists('main/README.md'):
+        try:
+            shutil.copy2('main/README.md', 'README.md')
+            console.print("[green]已更新根目錄的README.md[/green]")
+        except Exception as e:
+            console.print(f"[red]無法更新README.md: {str(e)}[/red]")
 
-if __name__ == "__main__":
+def main():
+    """主函數入口點"""
+    print_header()
+    
+    # 如果沒有參數，顯示使用說明
+    if len(sys.argv) == 1:
+        print_usage()
+        sys.exit(0)
+    
+    args = parse_arguments()
+    
+    # 執行指定的模塊
+    execute_module(args.run, args)
+
+if __name__ == '__main__':
     main() 

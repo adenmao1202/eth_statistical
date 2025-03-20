@@ -1,0 +1,110 @@
+{
+    "cluster_0": {
+        "members": [
+            "BTCUSDT"
+        ],
+        "size": 1,
+        "description": "\u4f4e\u6ce2\u52d5\u6027\u3001\u4f4e\u4ea4\u6613\u91cf\u3001\u6b63\u5411\u52d5\u91cf",
+        "mean_values": {
+            "latest_price": 85266.87,
+            "price_range": 0.4305406887188993,
+            "volatility_1d": 0.03279772329623578,
+            "volatility_3d": 0.0017572618240998786,
+            "volatility_7d": 0.0017866790220309376,
+            "avg_volume": 108.7582078188048,
+            "volume_change": 0.23760360828194615,
+            "volume_volatility": 1.1015666418415815,
+            "momentum_1d": 0.020420162385240248,
+            "momentum_3d": 0.02395889987687294,
+            "momentum_7d": 0.024386507876724473,
+            "eth_correlation": 0.9695762790118037,
+            "ma_crossover": -1.0,
+            "rsi": 23.682211648704495
+        }
+    },
+    "cluster_1": {
+        "members": [
+            "ETHUSDT",
+            "XRPUSDT",
+            "SOLUSDT",
+            "BNBUSDT",
+            "PEPEUSDT",
+            "DOGEUSDT",
+            "ADAUSDT",
+            "SUIUSDT",
+            "TRUMPUSDT",
+            "CAKEUSDT",
+            "SUSDT",
+            "LINKUSDT",
+            "LTCUSDT"
+        ],
+        "size": 13,
+        "description": "\u9ad8\u6ce2\u52d5\u6027\u3001\u9ad8\u4ea4\u6613\u91cf\u3001\u6b63\u5411\u52d5\u91cf",
+        "mean_values": {
+            "latest_price": 221.19398595692306,
+            "price_range": 1.8538111478275414,
+            "volatility_1d": 0.07078808251612857,
+            "volatility_3d": 0.0037784865035960574,
+            "volatility_7d": 0.00390858053402525,
+            "avg_volume": 6539303382.16836,
+            "volume_change": 0.3450788395954403,
+            "volume_volatility": 1.9424119009379832,
+            "momentum_1d": 0.023027674434173646,
+            "momentum_3d": 0.013847211962977028,
+            "momentum_7d": 0.0811262819029854,
+            "eth_correlation": 0.7606102046311289,
+            "ma_crossover": -1.0,
+            "rsi": 23.549681589365523
+        }
+    },
+    "cluster_2": {
+        "members": [
+            "USDCUSDT",
+            "FDUSDUSDT",
+            "TRXUSDT",
+            "EURUSDT"
+        ],
+        "size": 4,
+        "description": "\u4f4e\u6ce2\u52d5\u6027\u3001\u4f4e\u4ea4\u6613\u91cf\u3001\u6b63\u5411\u52d5\u91cf",
+        "mean_values": {
+            "latest_price": 0.828675,
+            "price_range": 0.11094336990448081,
+            "volatility_1d": 0.008749528875044082,
+            "volatility_3d": 0.0004664738399394531,
+            "volatility_7d": 0.0004728589732106717,
+            "avg_volume": 2240709.1880379235,
+            "volume_change": 0.6994662237935865,
+            "volume_volatility": 2.857943926131966,
+            "momentum_1d": -0.0011798574610952517,
+            "momentum_3d": 0.01650720727815594,
+            "momentum_7d": 0.005115753163552006,
+            "eth_correlation": 0.13763575117283308,
+            "ma_crossover": 0.5,
+            "rsi": 61.378205128205195
+        }
+    },
+    "cluster_3": {
+        "members": [
+            "BNXUSDT",
+            "AUCTIONUSDT"
+        ],
+        "size": 2,
+        "description": "\u9ad8\u6ce2\u52d5\u6027\u3001\u4f4e\u4ea4\u6613\u91cf\u3001\u6b63\u5411\u52d5\u91cf",
+        "mean_values": {
+            "latest_price": 24.04595,
+            "price_range": 10.344743106335564,
+            "volatility_1d": 0.1251542570902028,
+            "volatility_3d": 0.006352701367585788,
+            "volatility_7d": 0.006619818840295872,
+            "avg_volume": 133184.45782471498,
+            "volume_change": 0.6012282325581134,
+            "volume_volatility": 3.573450664950708,
+            "momentum_1d": 0.1861054640525902,
+            "momentum_3d": 0.5957939938101162,
+            "momentum_7d": 0.7865427319156304,
+            "eth_correlation": -0.6675786806394334,
+            "ma_crossover": 0.0,
+            "rsi": 49.15996503111529
+        }
+    }
+}

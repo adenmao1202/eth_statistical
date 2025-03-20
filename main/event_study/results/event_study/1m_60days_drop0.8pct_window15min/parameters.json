@@ -1,0 +1,13 @@
+{
+    "start_date": "2025-01-19",
+    "end_date": "2025-03-20",
+    "days": 60,
+    "timeframe": "1m",
+    "drop_threshold": -0.008,
+    "event_window": 15,
+    "window_size": 5,
+    "top_n": 20,
+    "use_cache": true,
+    "request_delay": 1.0,
+    "runtime": "2025-03-20 16:45:23"
+}

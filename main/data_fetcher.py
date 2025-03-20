@@ -2,441 +2,517 @@
 # -*- coding: utf-8 -*-
 
 """
-Data Fetcher Module
-Responsible for fetching historical data from Binance
+Cryptocurrency Data Fetcher
+Responsible for fetching historical price data from cryptocurrency exchanges
 """
 
 import os
 import time
+import random
 import pandas as pd
-import numpy as np
+from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime, timedelta
-from tqdm import tqdm
-import asyncio
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
 from binance.client import Client
+from rich.console import Console
+from rich.progress import Progress, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn, TimeElapsedColumn
 
 import config
-from utils import RateLimiter, CacheManager, ProxyManager, calculate_optimal_batch_size
+from utils import RateLimiter, CacheManager, ProxyManager, calculate_optimal_batch_size_for_fetching
 
+# Initialize Rich console
+console = Console()
 
 class DataFetcher:
-    """Data fetcher responsible for retrieving historical data from Binance"""
+    """Fetches cryptocurrency data from Binance"""
     
-    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None, 
+    def __init__(self, api_key: Optional[str] = None, api_secret: Optional[str] = None,
                  max_klines: int = config.DEFAULT_MAX_KLINES,
-                 request_delay: float = config.DEFAULT_REQUEST_DELAY, 
-                 max_workers: int = config.DEFAULT_MAX_WORKERS, 
-                 use_proxies: bool = False, 
-                 proxies: List[str] = None, 
-                 cache_expiry: int = config.DEFAULT_CACHE_EXPIRY):
+                 request_delay: float = config.DEFAULT_REQUEST_DELAY,
+                 max_workers: int = config.DEFAULT_MAX_WORKERS,
+                 use_proxies: bool = False):
         """
         Initialize the data fetcher
         
         Args:
             api_key (str, optional): Binance API key
             api_secret (str, optional): Binance API secret
-            max_klines (int, optional): Maximum number of klines to fetch
-            request_delay (float, optional): Delay between requests (seconds)
-            max_workers (int, optional): Maximum number of concurrent worker threads
-            use_proxies (bool, optional): Whether to use proxy rotation
-            proxies (List[str], optional): List of proxy URLs
-            cache_expiry (int, optional): Cache expiry time (seconds)
+            max_klines (int): Maximum number of klines to fetch per request
+            request_delay (float): Delay between API requests in seconds
+            max_workers (int): Maximum number of concurrent workers
+            use_proxies (bool): Whether to use proxy rotation
         """
         self.client = Client(api_key, api_secret)
-        self.max_klines = max(100, min(1500, max_klines))  # Ensure max_klines is between 100-1500
-        
-        # Initialize helper managers
-        self.rate_limiter = RateLimiter(request_delay)
-        self.cache_manager = CacheManager(config.CACHE_DIR, cache_expiry)
-        self.proxy_manager = ProxyManager(proxies, use_proxies)
-        
-        # Concurrency settings
+        self.max_klines = max_klines
         self.max_workers = max_workers
+        self.use_proxies = use_proxies
         
-        # Data directory
-        self.data_dir = config.DATA_DIR
-        os.makedirs(self.data_dir, exist_ok=True)
-    
-    def get_all_futures_symbols(self) -> List[str]:
+        # Initialize rate limiter
+        self.rate_limiter = RateLimiter(
+            request_delay=request_delay
+        )
+        
+        # Initialize cache manager
+        self.cache_manager = CacheManager(
+            cache_dir=config.CACHE_DIR, 
+            expiry=config.DEFAULT_CACHE_EXPIRY
+        )
+        
+        # Initialize proxy manager if requested
+        self.proxy_manager = ProxyManager() if use_proxies else None
+
+    def _get_symbols(self) -> List[str]:
         """
-        Get all available futures trading pairs
+        Get list of all USDT trading pairs
         
         Returns:
-            List[str]: List of futures trading pairs
+            List[str]: List of symbol names
         """
         try:
-            self.rate_limiter.wait(weight=10)  # Higher weight for exchange info
-            exchange_info = self.client.futures_exchange_info()
-            symbols = [s['symbol'] for s in exchange_info['symbols'] if s['status'] == 'TRADING']
-            return symbols
+            with console.status("[bold green]Fetching available symbols..."):
+                # Get exchange info
+                exchange_info = self.client.get_exchange_info()
+                
+                # Filter for USDT trading pairs that are TRADING status
+                symbols = [
+                    s['symbol'] for s in exchange_info['symbols']
+                    if s['symbol'].endswith('USDT') and s['status'] == 'TRADING'
+                ]
+                
+                console.print(f"[green]Found {len(symbols)} USDT trading pairs[/green]")
+                return symbols
         except Exception as e:
-            print(f"Error getting futures trading pairs: {e}")
-            # Return a set of popular trading pairs as fallback
-            return ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT', 'ADAUSDT', 
-                    'DOGEUSDT', 'SOLUSDT', 'DOTUSDT', 'AVAXUSDT', 'LINKUSDT']
+            console.print(f"[bold red]Error fetching symbols: {str(e)}[/bold red]")
+            return []
     
-    def download_historical_data(self, symbol: str, timeframe: str, 
-                                start_date: str, end_date: Optional[str] = None, 
-                                retry_count: int = config.MAX_RETRY_COUNT) -> pd.DataFrame:
+    def _fetch_klines(self, symbol: str, interval: str, start_time: Optional[int] = None, 
+                    end_time: Optional[int] = None) -> List[List]:
         """
-        Download historical kline data for a trading pair and timeframe
+        Fetch klines data for a single period
         
         Args:
-            symbol (str): Trading pair symbol (e.g., 'BTCUSDT')
-            timeframe (str): Kline timeframe (e.g., '1m', '1h')
-            start_date (str): Start date in 'YYYY-MM-DD' format
-            end_date (str, optional): End date in 'YYYY-MM-DD' format
-            retry_count (int, optional): Number of retries on failure
+            symbol (str): Symbol name
+            interval (str): Kline interval
+            start_time (int, optional): Start time in milliseconds
+            end_time (int, optional): End time in milliseconds
             
         Returns:
-            pd.DataFrame: DataFrame containing historical price data
+            List[List]: List of klines data
         """
-        if end_date is None:
-            end_date = datetime.now().strftime('%Y-%m-%d')
+        # Apply rate limiting
+        self.rate_limiter.wait()
         
-        # Parse dates
-        start_dt = datetime.strptime(start_date, '%Y-%m-%d')
-        end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        # Use proxy if enabled
+        kwargs = {}
+        if self.use_proxies and self.proxy_manager:
+            kwargs['proxies'] = self.proxy_manager.get_proxy()
         
-        # 检查时间范围是否合理
-        days_diff = (end_dt - start_dt).days
-        if days_diff <= 0:
-            raise ValueError(f"End date ({end_dt}) must be after start date ({start_dt})")
+        return self.client.get_klines(
+            symbol=symbol,
+            interval=interval,
+            startTime=start_time,
+            endTime=end_time,
+            limit=self.max_klines,
+            **kwargs
+        )
+    
+    def _process_klines(self, klines: List[List]) -> pd.DataFrame:
+        """
+        Process raw klines data into a DataFrame
+        
+        Args:
+            klines (List[List]): Raw klines data
             
-        # 将截止日期调整为当天结束时间
-        end_dt = end_dt.replace(hour=23, minute=59, second=59)
-        
-        print(f"Downloading data for {symbol} ({timeframe}) from {start_dt} to {end_dt} ({days_diff} days)")
-        
-        # Check cache first for the full date range
-        start_ts = int(start_dt.timestamp() * 1000)
-        end_ts = int(end_dt.timestamp() * 1000)
-        cache_key = self.cache_manager.get_cache_key(symbol, timeframe, start_ts, end_ts, 0)  # 0 means no limit
-        cached_data = self.cache_manager.load(cache_key)
-        if cached_data is not None:
-            print(f"Using cached data for {symbol} ({timeframe}) from {start_date} to {end_date}")
-            return cached_data
-        
-        # For long date ranges, we need to fetch data in chunks
-        # Calculate the maximum time range we can fetch in one request based on max_klines
-        minutes_per_chunk = self.max_klines * config.TIMEFRAME_MINUTES.get(timeframe, 60)
-        
-        # 对于较长的时间范围，调整每个块的大小以适应API限制
-        if days_diff > 30 and timeframe == '1m':
-            # 对于1分钟数据，每个块最多获取8小时数据（480分钟）
-            minutes_per_chunk = min(minutes_per_chunk, 480)
-            print(f"Adjusted chunk size to {minutes_per_chunk} minutes for long-range 1m data")
-        elif days_diff > 60 and timeframe == '5m':
-            # 对于5分钟数据，每个块最多获取1天数据（1440分钟）
-            minutes_per_chunk = min(minutes_per_chunk, 1440)
-            print(f"Adjusted chunk size to {minutes_per_chunk} minutes for long-range 5m data")
-        
-        # Convert to timedelta
-        chunk_delta = timedelta(minutes=minutes_per_chunk)
-        
-        # Initialize empty DataFrame to store all data
-        all_data = pd.DataFrame()
-        
-        # Calculate number of chunks needed
-        total_minutes = (end_dt - start_dt).total_seconds() / 60
-        num_chunks = max(1, int(total_minutes / minutes_per_chunk) + 1)
-        
-        print(f"Fetching data for {symbol} ({timeframe}) from {start_date} to {end_date}")
-        print(f"Total time range: {total_minutes:.1f} minutes, will fetch in {num_chunks} chunks")
-        
-        # Fetch data in chunks
-        current_start = start_dt
-        chunk_num = 1
-        max_chunks_without_progress = 5  # 如果连续多个块没有新数据，则提前退出
-        chunks_without_progress = 0
-        
-        # 使用tqdm进度条显示进度
-        pbar = tqdm(total=num_chunks, desc=f"Fetching {symbol} {timeframe}")
-        
-        while current_start < end_dt:
-            # Calculate end of this chunk
-            current_end = min(current_start + chunk_delta, end_dt)
-            
-            # Convert to timestamps
-            current_start_ts = int(current_start.timestamp() * 1000)
-            current_end_ts = int(current_end.timestamp() * 1000)
-            
-            if chunk_num % 10 == 0 or chunk_num == 1:
-                print(f"Fetching chunk {chunk_num}/{num_chunks}: {current_start.strftime('%Y-%m-%d %H:%M')} to {current_end.strftime('%Y-%m-%d %H:%M')}")
-            
-            # Calculate request weight based on limit parameter
-            request_weight = 1  # Default weight
-            if self.max_klines > 100:
-                if self.max_klines <= 500:
-                    request_weight = 2
-                elif self.max_klines <= 1000:
-                    request_weight = 5
-                else:
-                    request_weight = 10
-            
-            # Try to get data with retries
-            chunk_data = pd.DataFrame()
-            for attempt in range(retry_count):
-                try:
-                    # Wait for rate limit, using appropriate weight
-                    self.rate_limiter.wait(weight=request_weight)
-                    
-                    # Get data from Binance, using limit parameter
-                    klines = self.client.futures_historical_klines(
-                        symbol=symbol,
-                        interval=config.TIMEFRAMES[timeframe],
-                        start_str=current_start_ts,
-                        end_str=current_end_ts,
-                        limit=self.max_klines
-                    )
-                    
-                    # Create DataFrame
-                    if klines:
-                        df = pd.DataFrame(klines, columns=[
-                            'timestamp', 'open', 'high', 'low', 'close', 'volume',
-                            'close_time', 'quote_asset_volume', 'number_of_trades',
-                            'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
-                        ])
-                        
-                        # Convert timestamp to datetime
-                        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-                        
-                        # Convert price columns to float
-                        for col in ['open', 'high', 'low', 'close', 'volume']:
-                            df[col] = df[col].astype(float)
-                            
-                        # Set timestamp as index
-                        df.set_index('timestamp', inplace=True)
-                        
-                        # 检查是否获取了新数据
-                        if len(df) > 0:
-                            chunk_data = df
-                            chunks_without_progress = 0
-                        else:
-                            chunks_without_progress += 1
-                            if chunks_without_progress >= max_chunks_without_progress:
-                                print(f"No new data in {max_chunks_without_progress} consecutive chunks, skipping forward...")
-                                # 跳过一段时间以加速处理
-                                current_start = current_start + chunk_delta * 5
-                                chunks_without_progress = 0
-                        break
-                    else:
-                        chunks_without_progress += 1
-                        if chunks_without_progress >= max_chunks_without_progress:
-                            print(f"No data in {max_chunks_without_progress} consecutive chunks, skipping forward...")
-                            # 跳过一段时间以加速处理
-                            current_start = current_start + chunk_delta * 5
-                            chunks_without_progress = 0
-                        break
-                        
-                except Exception as e:
-                    print(f"Error getting data for {symbol} on {timeframe} (attempt {attempt+1}/{retry_count}): {e}")
-                    
-                    # Exponential backoff
-                    if attempt < retry_count - 1:
-                        backoff_time = (2 ** attempt) * self.rate_limiter.request_delay
-                        print(f"Retrying in {backoff_time:.2f} seconds...")
-                        time.sleep(backoff_time)
-            
-            # Append chunk data to all_data
-            if not chunk_data.empty:
-                all_data = pd.concat([all_data, chunk_data])
-                if chunk_num % 10 == 0:
-                    print(f"Downloaded {len(all_data)} data points so far")
-            
-            # Move to next chunk
-            current_start = current_end
-            chunk_num += 1
-            pbar.update(1)
-            
-            # Add small delay between chunks
-            time.sleep(0.5)
-        
-        # 关闭进度条
-        pbar.close()
-        
-        # Remove duplicates if any
-        if not all_data.empty:
-            # 检查数据覆盖情况
-            start_date_data = all_data.index.min().strftime('%Y-%m-%d')
-            end_date_data = all_data.index.max().strftime('%Y-%m-%d')
-            data_days = (all_data.index.max() - all_data.index.min()).days
-            
-            print(f"Data covers from {start_date_data} to {end_date_data} ({data_days} days)")
-            
-            # 检查是否有大的时间间隙
-            time_diffs = all_data.index.to_series().diff()
-            max_gap = time_diffs.max().total_seconds() / 60  # 最大间隙（分钟）
-            avg_gap = time_diffs.mean().total_seconds() / 60  # 平均间隙（分钟）
-            
-            if max_gap > config.TIMEFRAME_MINUTES.get(timeframe, 60) * 5:
-                print(f"Warning: Found large time gap in data: {max_gap:.0f} minutes (avg: {avg_gap:.1f} min)")
-                
-            # 删除重复数据并排序
-            duplicates_count = all_data.index.duplicated().sum()
-            if duplicates_count > 0:
-                print(f"Removing {duplicates_count} duplicate entries")
-            
-            all_data = all_data[~all_data.index.duplicated(keep='first')]
-            all_data.sort_index(inplace=True)
-            
-            # Save to cache
-            self.cache_manager.save(cache_key, all_data)
-            
-            print(f"Successfully fetched {len(all_data)} candles for {symbol} ({timeframe})")
-            return all_data
-        else:
-            print(f"Failed to get data for {symbol} on {timeframe}")
+        Returns:
+            pd.DataFrame: Processed klines data
+        """
+        if not klines:
             return pd.DataFrame()
+            
+        # Extract data columns
+        data = []
+        for k in klines:
+            data.append({
+                'timestamp': datetime.fromtimestamp(k[0] / 1000),
+                'open': float(k[1]),
+                'high': float(k[2]),
+                'low': float(k[3]),
+                'close': float(k[4]),
+                'volume': float(k[5]),
+                'close_time': datetime.fromtimestamp(k[6] / 1000),
+                'quote_asset_volume': float(k[7]),
+                'number_of_trades': int(k[8]),
+                'taker_buy_base_asset_volume': float(k[9]),
+                'taker_buy_quote_asset_volume': float(k[10])
+            })
+        
+        # Create DataFrame and set index
+        df = pd.DataFrame(data)
+        df.set_index('timestamp', inplace=True)
+        
+        return df
     
-    def save_data_to_csv(self, df: pd.DataFrame, symbol: str, timeframe: str) -> None:
+    def fetch_historical_data(self, symbol: str, interval: str, days: int, 
+                             end_date: Optional[str] = None,
+                             use_cache: bool = True,
+                             progress_bar: Optional[Any] = None) -> pd.DataFrame:
         """
-        Save DataFrame to CSV file
+        Fetch historical klines data for a symbol
         
         Args:
-            df (pd.DataFrame): DataFrame to save
-            symbol (str): Trading pair symbol
-            timeframe (str): Kline timeframe
-        """
-        filename = f"{self.data_dir}/{symbol}_{timeframe}.csv"
-        df.to_csv(filename)
-        print(f"Saved {symbol} {timeframe} data to {filename}")
-    
-    def load_data_from_csv(self, symbol: str, timeframe: str) -> Optional[pd.DataFrame]:
-        """
-        Load DataFrame from CSV file
-        
-        Args:
-            symbol (str): Trading pair symbol
-            timeframe (str): Kline timeframe
+            symbol (str): Symbol name
+            interval (str): Kline interval (e.g., '1m', '1h')
+            days (int): Number of days to fetch
+            end_date (str, optional): End date in YYYY-MM-DD format
+            use_cache (bool): Whether to use cached data
+            progress_bar (Any, optional): Optional external progress bar
             
         Returns:
-            Optional[pd.DataFrame]: DataFrame containing historical price data, or None if file doesn't exist
+            pd.DataFrame: Historical data
         """
-        filename = f"{self.data_dir}/{symbol}_{timeframe}.csv"
-        if os.path.exists(filename):
-            df = pd.read_csv(filename)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
-            df.set_index('timestamp', inplace=True)
-            return df
-        return None
-    
-    async def _fetch_single_symbol(self, symbol: str, timeframe: str, 
-                                  start_date: str, end_date: Optional[str], 
-                                  use_cache: bool) -> Tuple[str, Optional[pd.DataFrame]]:
-        """Asynchronously fetch data for a single symbol"""
+        # Check cache first if enabled
         if use_cache:
-            df = self.load_data_from_csv(symbol, timeframe)
-            if df is not None:
-                return symbol, df
-
-        try:
-            # Use synchronous API call since we're already in an async context
-            df = self.download_historical_data(symbol, timeframe, start_date, end_date)
-            if not df.empty:
-                self.save_data_to_csv(df, symbol, timeframe)
-                return symbol, df
-        except Exception as e:
-            print(f"Error fetching data for {symbol} on {timeframe}: {e}")
-        return symbol, None
-
-    async def fetch_data_for_all_symbols_async(self, symbols: List[str], timeframe: str, 
-                                             start_date: str, end_date: Optional[str] = None, 
-                                             use_cache: bool = True) -> Dict[str, pd.DataFrame]:
-        """Fetch historical data for all symbols in parallel using asyncio"""
-        data = {}
-        remaining_symbols = symbols.copy()
+            cache_key = f"{symbol}_{interval}_{days}_{end_date}"
+            cached_data = self.cache_manager.load(cache_key)
+            if cached_data is not None:
+                console.print(f"[cyan]Using cached data for {symbol}[/cyan]")
+                return cached_data
         
-        while remaining_symbols:
-            # Calculate optimal batch size based on current rate limit usage
-            batch_size = calculate_optimal_batch_size(
-                self.rate_limiter, 
-                len(remaining_symbols), 
-                timeframe, 
-                self.max_klines, 
-                self.max_workers
+        # Calculate time boundaries
+        if end_date:
+            end_datetime = datetime.strptime(end_date, '%Y-%m-%d')
+        else:
+            end_datetime = datetime.now()
+            
+        # Add one day to end_datetime to ensure we get all data for the last day
+        end_datetime = end_datetime + timedelta(days=1)
+        end_timestamp = int(end_datetime.timestamp() * 1000)
+        
+        start_datetime = end_datetime - timedelta(days=days)
+        start_timestamp = int(start_datetime.timestamp() * 1000)
+        
+        # Calculate optimal batch size
+        batch_size = calculate_optimal_batch_size_for_fetching(
+            interval=interval,
+            days=days,
+            max_klines=self.max_klines
+        )
+        
+        console.print(f"[yellow]Fetching {days} days of {interval} data for {symbol}[/yellow]")
+        console.print(f"[yellow]Period: {start_datetime.strftime('%Y-%m-%d')} to {end_datetime.strftime('%Y-%m-%d')}[/yellow]")
+        
+        # Calculate number of batches
+        total_minutes = days * 24 * 60
+        interval_minutes = config.TIMEFRAME_MINUTES.get(interval, 1)
+        total_candles = total_minutes // interval_minutes
+        num_batches = (total_candles + self.max_klines - 1) // self.max_klines
+        
+        all_klines = []
+        
+        # Create timeframes for batch requests
+        timeframes = []
+        current_start = start_timestamp
+        
+        while current_start < end_timestamp:
+            # Calculate batch end time
+            batch_end = min(
+                current_start + batch_size * 60 * 1000,  # batch_size minutes in milliseconds
+                end_timestamp
             )
             
-            # Get next batch of symbols
-            batch = remaining_symbols[:batch_size]
-            remaining_symbols = remaining_symbols[batch_size:]
-            
-            print(f"Processing batch of {len(batch)} symbols (remaining: {len(remaining_symbols)})")
-            
-            # Process batch
-            batch_tasks = []
-            for symbol in batch:
-                if use_cache:
-                    df = self.load_data_from_csv(symbol, timeframe)
-                    if df is not None:
-                        data[symbol] = df
-                        continue
-                
-                task = asyncio.create_task(self._fetch_single_symbol(symbol, timeframe, start_date, end_date, use_cache))
-                batch_tasks.append(task)
-            
-            if batch_tasks:
-                for coro in tqdm(asyncio.as_completed(batch_tasks), total=len(batch_tasks), desc=f"Fetching {timeframe} data (batch)"):
-                    symbol, df = await coro
-                    if df is not None:
-                        data[symbol] = df
-            
-            # Add small delay between batches to avoid hitting rate limits
-            if remaining_symbols:
-                await asyncio.sleep(0.5)
-                
-        return data
+            timeframes.append((current_start, batch_end))
+            current_start = batch_end
         
-    def fetch_data_for_all_symbols(self, symbols: List[str], timeframe: str, 
-                                  start_date: str, end_date: Optional[str] = None, 
-                                  use_cache: bool = True) -> Dict[str, pd.DataFrame]:
-        """Fetch historical data for all symbols in parallel using ThreadPoolExecutor"""
-        data = {}
-        remaining_symbols = symbols.copy()
-        
-        while remaining_symbols:
-            # Calculate optimal batch size based on current rate limit usage
-            batch_size = calculate_optimal_batch_size(
-                self.rate_limiter, 
-                len(remaining_symbols), 
-                timeframe, 
-                self.max_klines, 
-                self.max_workers
-            )
-            
-            # Get next batch of symbols
-            batch = remaining_symbols[:batch_size]
-            remaining_symbols = remaining_symbols[batch_size:]
-            
-            print(f"Processing batch of {len(batch)} symbols (remaining: {len(remaining_symbols)})")
-            
-            with ThreadPoolExecutor(max_workers=min(self.max_workers, len(batch))) as executor:
-                futures = {}
-                for symbol in batch:
-                    if use_cache:
-                        df = self.load_data_from_csv(symbol, timeframe)
-                        if df is not None:
-                            data[symbol] = df
-                            continue
-                            
-                    futures[executor.submit(self.download_historical_data, symbol, timeframe, start_date, end_date)] = symbol
+        # Fetch data in batches with progress tracking
+        if progress_bar is None:
+            # Create a new Progress instance if none was provided
+            with Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(), 
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                TimeElapsedColumn(),
+                console=console
+            ) as progress:
+                task = progress.add_task(f"[cyan]Fetching {symbol}...", total=len(timeframes))
                 
-                if futures:
-                    for future in tqdm(as_completed(futures), total=len(futures), desc=f"Fetching {timeframe} data (batch)"):
-                        symbol = futures[future]
-                        try:
-                            df = future.result()
-                            if not df.empty:
-                                data[symbol] = df
-                                self.save_data_to_csv(df, symbol, timeframe)
-                        except Exception as e:
-                            print(f"Error fetching data for {symbol} on {timeframe}: {e}")
+                for start, end in timeframes:
+                    try:
+                        batch_klines = self._fetch_klines(symbol, interval, start, end)
+                        all_klines.extend(batch_klines)
+                        progress.update(task, advance=1)
+                    except Exception as e:
+                        console.print(f"[bold red]Error fetching {symbol} from {datetime.fromtimestamp(start/1000)} to {datetime.fromtimestamp(end/1000)}: {str(e)}[/bold red]")
+                        # Add a delay to recover from errors
+                        time.sleep(2)
+        else:
+            # Use the provided progress bar
+            for start, end in timeframes:
+                try:
+                    batch_klines = self._fetch_klines(symbol, interval, start, end)
+                    all_klines.extend(batch_klines)
+                    # No progress update here, handled by the caller
+                except Exception as e:
+                    console.print(f"[bold red]Error fetching {symbol} from {datetime.fromtimestamp(start/1000)} to {datetime.fromtimestamp(end/1000)}: {str(e)}[/bold red]")
+                    # Add a delay to recover from errors
+                    time.sleep(2)
+        
+        # Process all klines
+        df = self._process_klines(all_klines)
+        
+        # Sort index to ensure chronological order
+        if not df.empty:
+            df.sort_index(inplace=True)
+            console.print(f"[green]Successfully fetched {len(df)} candles for {symbol}[/green]")
             
-            # Add small delay between batches to avoid hitting rate limits
-            if remaining_symbols:
-                print(f"Batch complete. Moving to next batch...")
-                time.sleep(0.5)  # Small delay between batches
+            # Cache the result if enabled
+            if use_cache:
+                self.cache_manager.save(cache_key, df)
+        else:
+            console.print(f"[bold red]No data fetched for {symbol}[/bold red]")
+        
+        return df
+    
+    def fetch_multi_symbols(self, symbols: List[str], interval: str, days: int,
+                           end_date: Optional[str] = None, 
+                           use_cache: bool = True) -> Dict[str, pd.DataFrame]:
+        """
+        Fetch data for multiple symbols concurrently
+        
+        Args:
+            symbols (List[str]): List of symbols
+            interval (str): Kline interval
+            days (int): Number of days to fetch
+            end_date (str, optional): End date in YYYY-MM-DD format
+            use_cache (bool): Whether to use cached data
+            
+        Returns:
+            Dict[str, pd.DataFrame]: Dictionary of symbol -> data
+        """
+        result = {}
+        
+        # Determine symbols to process
+        symbols_to_process = []
+        cached_symbols = 0
+        
+        if use_cache:
+            # Check cache first
+            for symbol in symbols:
+                cache_key = f"{symbol}_{interval}_{days}_{end_date}"
+                cached_data = self.cache_manager.load(cache_key)
+                if cached_data is not None:
+                    result[symbol] = cached_data
+                    cached_symbols += 1
+                else:
+                    symbols_to_process.append(symbol)
                     
-        return data 
+            if cached_symbols > 0:
+                console.print(f"[cyan]Using cached data for {cached_symbols} symbols[/cyan]")
+        else:
+            symbols_to_process = symbols
+        
+        # If we have symbols to process, use ThreadPoolExecutor
+        if symbols_to_process:
+            console.print(f"[yellow]Fetching data for {len(symbols_to_process)} symbols...[/yellow]")
+            
+            with Progress(
+                TextColumn("[bold blue]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(), 
+                TimeRemainingColumn(),
+                TimeElapsedColumn(),
+                console=console
+            ) as progress:
+                task = progress.add_task(f"[cyan]Fetching symbols...", total=len(symbols_to_process))
+                
+                # Define a list to store (symbol, future) pairs
+                futures = []
+                
+                # Submit all tasks
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    for symbol in symbols_to_process:
+                        future = executor.submit(
+                            self.fetch_historical_data,
+                            symbol=symbol,
+                            interval=interval,
+                            days=days,
+                            end_date=end_date,
+                            use_cache=use_cache,
+                            progress_bar=True  # Just pass a flag indicating external progress tracking
+                        )
+                        futures.append((symbol, future))
+                    
+                    # Process results as they complete
+                    for symbol, future in futures:
+                        try:
+                            data = future.result()
+                            result[symbol] = data
+                            progress.update(task, advance=1)
+                        except Exception as e:
+                            console.print(f"[bold red]Error fetching {symbol}: {str(e)}[/bold red]")
+        
+        console.print(f"[green]Successfully fetched data for {len(result)} symbols[/green]")
+        return result
+    
+    def get_top_volume_symbols(self, n: int = 100, quote_asset: str = 'USDT') -> List[str]:
+        """
+        Get top N symbols by 24h volume
+        
+        Args:
+            n (int): Number of symbols to return
+            quote_asset (str): Quote asset filter
+            
+        Returns:
+            List[str]: List of symbol names
+        """
+        try:
+            with console.status(f"[bold green]Fetching top {n} {quote_asset} pairs by volume..."):
+                # Get 24h ticker for all symbols
+                tickers = self.client.get_ticker()
+                
+                # Filter for USDT pairs and sort by volume
+                usdt_tickers = [t for t in tickers if t['symbol'].endswith(quote_asset)]
+                usdt_tickers.sort(key=lambda x: float(x['quoteVolume']), reverse=True)
+                
+                # Get the top N symbols
+                top_symbols = [t['symbol'] for t in usdt_tickers[:n]]
+                
+                console.print(f"[green]Found top {len(top_symbols)} {quote_asset} trading pairs by volume[/green]")
+                return top_symbols
+        except Exception as e:
+            console.print(f"[bold red]Error fetching top volume symbols: {str(e)}[/bold red]")
+            return []
+    
+    def get_all_data(self, timeframe: str = '1m', days: int = 30, 
+                   top_n: int = 100, end_date: Optional[str] = None,
+                   use_cache: bool = True,
+                   include_reference: bool = True) -> Dict[str, pd.DataFrame]:
+        """
+        Get data for all top symbols
+        
+        Args:
+            timeframe (str): Timeframe to fetch
+            days (int): Number of days to fetch
+            top_n (int): Number of top symbols by volume to fetch
+            end_date (str, optional): End date in YYYY-MM-DD format
+            use_cache (bool): Whether to use cached data
+            include_reference (bool): Whether to include reference symbol (ETH)
+            
+        Returns:
+            Dict[str, pd.DataFrame]: Dictionary of symbol -> data
+        """
+        # Get top symbols by volume
+        symbols = self.get_top_volume_symbols(n=top_n)
+        
+        # Add reference symbol if not already included
+        reference_symbol = config.DEFAULT_REFERENCE_SYMBOL
+        if include_reference and reference_symbol not in symbols:
+            symbols.insert(0, reference_symbol)
+        
+        console.print(f"[bold]Fetching data for {len(symbols)} symbols[/bold]")
+        
+        # Fetch data for all symbols
+        data = self.fetch_multi_symbols(
+            symbols=symbols,
+            interval=timeframe,
+            days=days,
+            end_date=end_date,
+            use_cache=use_cache
+        )
+        
+        return data
+    
+    def get_cache_stats(self) -> Dict[str, Any]:
+        """
+        獲取緩存統計信息
+        
+        Returns:
+            Dict[str, Any]: 緩存統計，包括大小、項目數量等
+        """
+        try:
+            # 统计缓存文件数量和总大小
+            cache_files = []
+            total_size = 0
+            
+            for root, _, files in os.walk(config.CACHE_DIR):
+                for file in files:
+                    if file.endswith('.parquet'):
+                        file_path = os.path.join(root, file)
+                        file_size = os.path.getsize(file_path)
+                        file_time = os.path.getmtime(file_path)
+                        total_size += file_size
+                        cache_files.append({
+                            'path': file_path, 
+                            'size': file_size, 
+                            'modified': datetime.fromtimestamp(file_time)
+                        })
+            
+            # 对缓存按时间排序
+            cache_files.sort(key=lambda x: x['modified'], reverse=True)
+            
+            # 获取最老和最新的缓存
+            oldest_cache = cache_files[-1] if cache_files else None
+            newest_cache = cache_files[0] if cache_files else None
+            
+            # 计算缓存有效期
+            current_time = time.time()
+            expired_files = sum(1 for f in cache_files if current_time - os.path.getmtime(f['path']) > config.DEFAULT_CACHE_EXPIRY)
+            
+            return {
+                'total_files': len(cache_files),
+                'total_size_mb': total_size / (1024 * 1024),
+                'oldest_cache': oldest_cache,
+                'newest_cache': newest_cache,
+                'expired_files': expired_files,
+                'cache_dir': config.CACHE_DIR,
+                'cache_expiry_days': config.DEFAULT_CACHE_EXPIRY / (24 * 3600)
+            }
+        except Exception as e:
+            console.print(f"[bold red]Error getting cache stats: {str(e)}[/bold red]")
+            return {
+                'error': str(e),
+                'cache_dir': config.CACHE_DIR
+            }
+    
+    def clean_expired_cache(self, force_clean: bool = False) -> Dict[str, Any]:
+        """
+        清理過期緩存文件
+        
+        Args:
+            force_clean (bool): 是否強制清理所有緩存
+            
+        Returns:
+            Dict[str, Any]: 清理結果統計
+        """
+        try:
+            current_time = time.time()
+            removed_files = 0
+            reclaimed_space = 0
+            
+            for root, _, files in os.walk(config.CACHE_DIR):
+                for file in files:
+                    if file.endswith('.parquet'):
+                        file_path = os.path.join(root, file)
+                        file_time = os.path.getmtime(file_path)
+                        file_size = os.path.getsize(file_path)
+                        
+                        # 檢查文件是否過期或強制清理
+                        if force_clean or (current_time - file_time > config.DEFAULT_CACHE_EXPIRY):
+                            try:
+                                os.remove(file_path)
+                                removed_files += 1
+                                reclaimed_space += file_size
+                            except Exception as e:
+                                console.print(f"[bold red]Error removing file {file_path}: {str(e)}[/bold red]")
+            
+            result = {
+                'removed_files': removed_files,
+                'reclaimed_space_mb': reclaimed_space / (1024 * 1024),
+                'force_clean': force_clean
+            }
+            
+            console.print(f"[bold green]Removed {removed_files} cache files, reclaimed {result['reclaimed_space_mb']:.2f} MB of disk space[/bold green]")
+            return result
+        except Exception as e:
+            console.print(f"[bold red]Error cleaning cache: {str(e)}[/bold red]")
+            return {'error': str(e)} 
