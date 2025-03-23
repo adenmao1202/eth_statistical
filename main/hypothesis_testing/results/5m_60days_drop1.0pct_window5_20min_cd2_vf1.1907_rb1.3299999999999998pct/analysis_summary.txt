@@ -1,0 +1,58 @@
+===== Crypto Market Analysis Summary =====
+
+1. Return Difference Analysis
+-----------------------
+Analyzed 97 cryptocurrencies
+Statistically significant results: 93 (95.9%)
+Positive significant difference: 93 (100.0% of significant results)
+Negative significant difference: 0 (0.0% of significant results)
+
+Top 5 cryptocurrencies with largest return difference:
+  ADAUSDT: 2.13% (p=0.0001)
+  SUIUSDT: 1.91% (p=0.0001)
+  CRVUSDT: 1.86% (p=0.0001)
+  AIXBTUSDT: 1.83% (p=0.0008)
+  PENDLEUSDT: 1.82% (p=0.0001)
+
+Top 5 cryptocurrencies with smallest return difference:
+  USDCUSDT: 0.00% (p=0.7118)
+  FDUSDUSDT: 0.01% (p=0.1359)
+  EURUSDT: 0.04% (p=0.0016)
+  TRXUSDT: 0.43% (p=0.0042)
+  1000CHEEMSUSDT: 0.60% (p=0.0915)
+
+
+2. Rebound Time Analysis
+-----------------------
+Analyzed 92 cryptocurrencies' rebound time
+Coins that rebound earlier than ETH: 0 (0.0%)
+
+Top 5 cryptocurrencies that rebound fastest:
+  TSTUSDT: Earlier rebound percentage compared to ETH 33.3%, Average time difference -1.7 minutes
+  1000SATSUSDT: Earlier rebound percentage compared to ETH 33.3%, Average time difference 3.3 minutes
+  BURGERUSDT: Earlier rebound percentage compared to ETH 33.3%, Average time difference -3.3 minutes
+  KAITOUSDT: Earlier rebound percentage compared to ETH 33.3%, Average time difference -1.7 minutes
+  ADAUSDT: Earlier rebound percentage compared to ETH 25.0%, Average time difference -1.2 minutes
+
+
+3. Trading Strategy Evaluation
+-----------------------
+Evaluated 20 cryptocurrencies' trading strategies
+Profitable coins: 18 (90.0%)
+Average win rate of profitable coins: 41.5%
+Average profit of profitable coins: 0.23%
+
+Top 5 cryptocurrencies with best strategy performance:
+  DFUSDT: Total profit 16.9%, Win rate 56.7%, Average holding time 18.0 minutes
+  BNXUSDT: Total profit 15.5%, Win rate 50.0%, Average holding time 15.3 minutes
+  ADAUSDT: Total profit 10.1%, Win rate 46.7%, Average holding time 14.3 minutes
+  EIGENUSDT: Total profit 8.6%, Win rate 36.7%, Average holding time 13.0 minutes
+  APTUSDT: Total profit 8.2%, Win rate 46.7%, Average holding time 15.7 minutes
+
+
+4. Comprehensive Advice
+-----------------------
+No coins that meet all conditions, recommended:
+1. Consider loosening selection criteria
+2. Increase historical data range for analysis
+3. Adjust ETH drop threshold or event window size

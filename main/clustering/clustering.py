@@ -27,6 +27,7 @@ from sklearn.metrics import accuracy_score
 
 import sys
 import os
+import traceback
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import config
@@ -173,6 +174,23 @@ class ClusteringAnalyzer:
                 
                 # 移動平均線交叉
                 features['ma_cross'] = (df['ma20'].iloc[-1] > df['ma50'].iloc[-1]) * 2 - 1  # +1表示金叉，-1表示死叉
+                
+                # 添加与ETH的相关性特征
+                if self.reference_symbol in data_dict and symbol != self.reference_symbol:
+                    eth_df = data_dict[self.reference_symbol].copy()
+                    if len(eth_df) > 0 and len(df) > 0:
+                        # 确保两个数据框有相同的时间索引
+                        common_index = df.index.intersection(eth_df.index)
+                        if len(common_index) > 5:  # 至少需要5个共同点来计算相关性
+                            eth_returns = eth_df.loc[common_index, 'close'].pct_change().fillna(0)
+                            symbol_returns = df.loc[common_index, 'close'].pct_change().fillna(0)
+                            features['eth_correlation'] = eth_returns.corr(symbol_returns)
+                        else:
+                            features['eth_correlation'] = 0
+                    else:
+                        features['eth_correlation'] = 0
+                else:
+                    features['eth_correlation'] = 1 if symbol == self.reference_symbol else 0
                 
                 # 將特徵存儲在字典中
                 all_features[symbol] = features
@@ -473,8 +491,8 @@ class ClusteringAnalyzer:
                 'num_coins': len(cluster_coins),
                 'avg_volatility': cluster_coins['volatility_1d'].mean(),
                 'avg_eth_correlation': cluster_coins['eth_correlation'].mean(),
-                'avg_momentum_1d': cluster_coins['momentum_1d'].mean(),
-                'avg_volume_volatility': cluster_coins['volume_volatility'].mean(),
+                'avg_recent_return': cluster_coins['recent_return_1d'].mean(),
+                'avg_volume_change': cluster_coins['volume_change_1d'].mean(),
                 'avg_rsi': cluster_coins['rsi'].mean(),
                 'example_coins': ', '.join(cluster_coins.index[:5].tolist())
             }
@@ -490,7 +508,7 @@ class ClusteringAnalyzer:
             print(f"\nCluster {int(row['cluster_id'])} ({int(row['num_coins'])} coins):")
             print(f"  Average Volatility: {row['avg_volatility']:.4f}")
             print(f"  Average ETH Correlation: {row['avg_eth_correlation']:.4f}")
-            print(f"  Average 1-day Momentum: {row['avg_momentum_1d']:.4f}")
+            print(f"  Average Recent Return: {row['avg_recent_return']:.4f}")
             print(f"  Average RSI: {row['avg_rsi']:.2f}")
             print(f"  Example coins: {row['example_coins']}")
         
@@ -610,7 +628,6 @@ class ClusteringAnalyzer:
         except Exception as e:
             print(f"Error during classifier training: {str(e)}")
             traceback.print_exc()
-            model = None
             feature_importance = pd.DataFrame({'feature': features.columns, 'importance': 0.0})
             
         # 評估聚類質量並打印指標

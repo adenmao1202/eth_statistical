@@ -1,0 +1,199 @@
+===== Crypto Market Analysis Summary =====
+
+1. Return Difference Analysis
+-----------------------
+Analyzed 97 cryptocurrencies
+Statistically significant results: 97 (100.0%)
+Positive significant difference: 97 (100.0% of significant results)
+Negative significant difference: 0 (0.0% of significant results)
+
+Top 5 cryptocurrencies with largest return difference:
+  EIGENUSDT: 3.22% (p=0.0000)
+  ARKMUSDT: 3.06% (p=0.0000)
+  ORDIUSDT: 3.01% (p=0.0000)
+  ZKUSDT: 2.95% (p=0.0000)
+  DOGSUSDT: 2.93% (p=0.0000)
+
+Top 5 cryptocurrencies with smallest return difference:
+  USDCUSDT: 0.01% (p=0.0004)
+  FDUSDUSDT: 0.02% (p=0.0056)
+  EURUSDT: 0.05% (p=0.0004)
+  1000CHEEMSUSDT: 0.85% (p=0.0272)
+  TRXUSDT: 1.03% (p=0.0000)
+
+
+2. Rebound Time Analysis
+-----------------------
+Analyzed 95 cryptocurrencies' rebound time
+Coins that rebound earlier than ETH: 22 (23.2%)
+
+Top 5 cryptocurrencies that rebound fastest:
+  EPICUSDT: Earlier rebound percentage compared to ETH 100.0%, Average time difference -7.5 minutes
+  BMTUSDT: Earlier rebound percentage compared to ETH 100.0%, Average time difference -4.0 minutes
+  TRUMPUSDT: Earlier rebound percentage compared to ETH 64.0%, Average time difference -4.2 minutes
+  AIXBTUSDT: Earlier rebound percentage compared to ETH 61.5%, Average time difference -5.9 minutes
+  EIGENUSDT: Earlier rebound percentage compared to ETH 59.0%, Average time difference -4.4 minutes
+
+
+3. Trading Strategy Evaluation
+-----------------------
+Evaluated 20 cryptocurrencies' trading strategies
+Profitable coins: 18 (90.0%)
+Average win rate of profitable coins: 30.6%
+Average profit of profitable coins: 0.40%
+
+Top 5 cryptocurrencies with best strategy performance:
+  AUCTIONUSDT: Total profit 54.3%, Win rate 39.2%, Average holding time 23.1 minutes
+  BOMEUSDT: Total profit 53.0%, Win rate 32.0%, Average holding time 18.7 minutes
+  EIGENUSDT: Total profit 51.9%, Win rate 30.9%, Average holding time 16.8 minutes
+  JUPUSDT: Total profit 47.2%, Win rate 33.0%, Average holding time 21.4 minutes
+  TAOUSDT: Total profit 46.3%, Win rate 29.9%, Average holding time 18.0 minutes
+
+
+4. Comprehensive Advice
+-----------------------
+Comprehensive analysis results, the following coins performed best after ETH drop, recommended to consider first:
+  AUCTIONUSDT:
+    - Return difference: +2.39% (p=0.0000)
+    - Rebound earlier than ETH: 51.6% in events
+    - Average rebound time difference: -4.1 minutes
+    - Trading strategy win rate: 39.2%
+    - Trading strategy total profit: 54.3%
+    - Average holding time: 23.1 minutes
+
+  BOMEUSDT:
+    - Return difference: +2.83% (p=0.0000)
+    - Rebound earlier than ETH: 52.9% in events
+    - Average rebound time difference: -2.3 minutes
+    - Trading strategy win rate: 32.0%
+    - Trading strategy total profit: 53.0%
+    - Average holding time: 18.7 minutes
+
+  EIGENUSDT:
+    - Return difference: +3.22% (p=0.0000)
+    - Rebound earlier than ETH: 59.0% in events
+    - Average rebound time difference: -4.4 minutes
+    - Trading strategy win rate: 30.9%
+    - Trading strategy total profit: 51.9%
+    - Average holding time: 16.8 minutes
+
+  JUPUSDT:
+    - Return difference: +2.37% (p=0.0000)
+    - Rebound earlier than ETH: 51.4% in events
+    - Average rebound time difference: -3.8 minutes
+    - Trading strategy win rate: 33.0%
+    - Trading strategy total profit: 47.2%
+    - Average holding time: 21.4 minutes
+
+  TAOUSDT:
+    - Return difference: +2.79% (p=0.0000)
+    - Rebound earlier than ETH: 58.3% in events
+    - Average rebound time difference: -3.0 minutes
+    - Trading strategy win rate: 29.9%
+    - Trading strategy total profit: 46.3%
+    - Average holding time: 18.0 minutes
+
+  ORDIUSDT:
+    - Return difference: +3.01% (p=0.0000)
+    - Rebound earlier than ETH: 51.4% in events
+    - Average rebound time difference: -3.5 minutes
+    - Trading strategy win rate: 30.9%
+    - Trading strategy total profit: 43.7%
+    - Average holding time: 18.2 minutes
+
+  XLMUSDT:
+    - Return difference: +2.58% (p=0.0000)
+    - Rebound earlier than ETH: 52.9% in events
+    - Average rebound time difference: -2.7 minutes
+    - Trading strategy win rate: 35.1%
+    - Trading strategy total profit: 42.0%
+    - Average holding time: 21.2 minutes
+
+  DOGEUSDT:
+    - Return difference: +2.65% (p=0.0000)
+    - Rebound earlier than ETH: 51.4% in events
+    - Average rebound time difference: -2.0 minutes
+    - Trading strategy win rate: 38.1%
+    - Trading strategy total profit: 39.0%
+    - Average holding time: 21.4 minutes
+
+  WIFUSDT:
+    - Return difference: +2.70% (p=0.0000)
+    - Rebound earlier than ETH: 51.4% in events
+    - Average rebound time difference: -1.8 minutes
+    - Trading strategy win rate: 24.7%
+    - Trading strategy total profit: 37.5%
+    - Average holding time: 16.1 minutes
+
+  TRUMPUSDT:
+    - Return difference: +2.12% (p=0.0001)
+    - Rebound earlier than ETH: 64.0% in events
+    - Average rebound time difference: -4.2 minutes
+    - Trading strategy win rate: 31.1%
+    - Trading strategy total profit: 32.1%
+    - Average holding time: 16.2 minutes
+
+  AIXBTUSDT:
+    - Return difference: +2.43% (p=0.0000)
+    - Rebound earlier than ETH: 61.5% in events
+    - Average rebound time difference: -5.9 minutes
+    - Trading strategy win rate: 25.3%
+    - Trading strategy total profit: 31.8%
+    - Average holding time: 14.2 minutes
+
+  ENAUSDT:
+    - Return difference: +2.83% (p=0.0000)
+    - Rebound earlier than ETH: 52.6% in events
+    - Average rebound time difference: -3.7 minutes
+    - Trading strategy win rate: 27.8%
+    - Trading strategy total profit: 30.1%
+    - Average holding time: 16.0 minutes
+
+  WLDUSDT:
+    - Return difference: +2.65% (p=0.0000)
+    - Rebound earlier than ETH: 52.8% in events
+    - Average rebound time difference: -1.2 minutes
+    - Trading strategy win rate: 28.9%
+    - Trading strategy total profit: 29.9%
+    - Average holding time: 16.4 minutes
+
+  1000SATSUSDT:
+    - Return difference: +2.30% (p=0.0000)
+    - Rebound earlier than ETH: 54.2% in events
+    - Average rebound time difference: -2.1 minutes
+    - Trading strategy win rate: 40.2%
+    - Trading strategy total profit: 29.6%
+    - Average holding time: 26.1 minutes
+
+  LINKUSDT:
+    - Return difference: +2.62% (p=0.0000)
+    - Rebound earlier than ETH: 56.8% in events
+    - Average rebound time difference: -3.9 minutes
+    - Trading strategy win rate: 27.8%
+    - Trading strategy total profit: 28.1%
+    - Average holding time: 17.9 minutes
+
+  BNXUSDT:
+    - Return difference: +2.24% (p=0.0000)
+    - Rebound earlier than ETH: 56.2% in events
+    - Average rebound time difference: -2.7 minutes
+    - Trading strategy win rate: 28.1%
+    - Trading strategy total profit: 27.0%
+    - Average holding time: 18.4 minutes
+
+  PENGUUSDT:
+    - Return difference: +2.18% (p=0.0000)
+    - Rebound earlier than ETH: 53.6% in events
+    - Average rebound time difference: -4.9 minutes
+    - Trading strategy win rate: 22.5%
+    - Trading strategy total profit: 19.4%
+    - Average holding time: 17.5 minutes
+
+  TSTUSDT:
+    - Return difference: +2.07% (p=0.0001)
+    - Rebound earlier than ETH: 58.3% in events
+    - Average rebound time difference: -3.4 minutes
+    - Trading strategy win rate: 25.6%
+    - Trading strategy total profit: 13.6%
+    - Average holding time: 16.8 minutes
+

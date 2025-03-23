@@ -1,0 +1,33 @@
+python main.py --days 30 --timeframe 5m --drop_threshold -0.0052 --consecutive_drops 2 --volume_factor 1.1907 --rebound_threshold 0.0133 --take_profit_pct 0.0333 --stop_loss_pct 0.0052 --pre_event_window 15 --post_event_window 45
+
+
+
+## description : 
+
+1. drop_threshold (-0.0052)：
+取自5期價格變動的第5百分位數
+表示僅有5%的5分鐘價格變動下跌幅度會超過0.52%
+
+2. consecutive_drops (2)：
+基於連續下跌K線數的中位數（四捨五入）
+反映ETH典型的連續下跌模式
+
+3. volume_factor (1.1907)：
+使用成交量比率的第75百分位數
+表示只考慮成交量明顯高於平均值的下跌事件
+
+4. rebound_threshold (0.0133)：
+計算不同下跌閾值後，15根K線內可達到的最大反彈幅度的平均值
+這是一個統計上在合理時間內可預期的反彈水平
+
+5. take_profit_pct (0.0333)：
+設為反彈閾值的2.5倍
+提供合理的止盈目標，既不過於貪婪也不過早出場
+
+6. stop_loss_pct (0.0052)：
+設為下跌閾值的絕對值，但不超過3%
+保證風險控制在初始下跌判斷的範圍內
+
+7. pre_event_window (15) 和 post_event_window (45)：
+提供足夠的事件前後數據來分析反彈模式
+post_event_window設置為pre_event_window的3倍，確保捕捉完整反彈過程

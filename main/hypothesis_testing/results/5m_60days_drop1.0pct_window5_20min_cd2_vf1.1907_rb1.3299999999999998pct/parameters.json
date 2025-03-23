@@ -1,0 +1,18 @@
+{
+    "start_date": "2025-01-22",
+    "end_date": "2025-03-23",
+    "days": 60,
+    "timeframe": "5m",
+    "drop_threshold": -0.01,
+    "pre_event_window": 5,
+    "post_event_window": 20,
+    "top_n": 20,
+    "consecutive_drops": 2,
+    "volume_factor": 1.1907,
+    "rebound_threshold": 0.0133,
+    "take_profit_pct": 0.05,
+    "stop_loss_pct": 0.01,
+    "use_cache": true,
+    "request_delay": 1.0,
+    "runtime": "2025-03-23 19:45:47"
+}

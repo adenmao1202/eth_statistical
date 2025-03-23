@@ -1,0 +1,58 @@
+===== Crypto Market Analysis Summary =====
+
+1. Return Difference Analysis
+-----------------------
+Analyzed 97 cryptocurrencies
+Statistically significant results: 96 (99.0%)
+Positive significant difference: 96 (100.0% of significant results)
+Negative significant difference: 0 (0.0% of significant results)
+
+Top 5 cryptocurrencies with largest return difference:
+  ADAUSDT: 2.16% (p=0.0000)
+  PENDLEUSDT: 2.12% (p=0.0000)
+  EIGENUSDT: 2.01% (p=0.0000)
+  TRUMPUSDT: 1.96% (p=0.0000)
+  ETHFIUSDT: 1.96% (p=0.0000)
+
+Top 5 cryptocurrencies with smallest return difference:
+  FDUSDUSDT: 0.00% (p=0.2376)
+  USDCUSDT: 0.00% (p=0.0230)
+  EURUSDT: 0.04% (p=0.0003)
+  TRXUSDT: 0.51% (p=0.0000)
+  OMUSDT: 0.83% (p=0.0000)
+
+
+2. Rebound Time Analysis
+-----------------------
+Analyzed 93 cryptocurrencies' rebound time
+Coins that rebound earlier than ETH: 0 (0.0%)
+
+Top 5 cryptocurrencies that rebound fastest:
+  AUCTIONUSDT: Earlier rebound percentage compared to ETH 50.0%, Average time difference -10.0 minutes
+  KAITOUSDT: Earlier rebound percentage compared to ETH 44.4%, Average time difference -1.7 minutes
+  BURGERUSDT: Earlier rebound percentage compared to ETH 44.4%, Average time difference -5.0 minutes
+  ADAUSDT: Earlier rebound percentage compared to ETH 41.7%, Average time difference -3.3 minutes
+  WLDUSDT: Earlier rebound percentage compared to ETH 41.7%, Average time difference -5.4 minutes
+
+
+3. Trading Strategy Evaluation
+-----------------------
+Evaluated 20 cryptocurrencies' trading strategies
+Profitable coins: 20 (100.0%)
+Average win rate of profitable coins: 36.6%
+Average profit of profitable coins: 0.28%
+
+Top 5 cryptocurrencies with best strategy performance:
+  BURGERUSDT: Total profit 41.3%, Win rate 41.4%, Average holding time 23.1 minutes
+  ADAUSDT: Total profit 27.8%, Win rate 42.9%, Average holding time 26.6 minutes
+  PENDLEUSDT: Total profit 27.0%, Win rate 42.9%, Average holding time 27.7 minutes
+  ETHFIUSDT: Total profit 26.1%, Win rate 37.1%, Average holding time 28.6 minutes
+  BNXUSDT: Total profit 25.7%, Win rate 32.4%, Average holding time 21.3 minutes
+
+
+4. Comprehensive Advice
+-----------------------
+No coins that meet all conditions, recommended:
+1. Consider loosening selection criteria
+2. Increase historical data range for analysis
+3. Adjust ETH drop threshold or event window size

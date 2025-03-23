@@ -290,7 +290,14 @@ def main():
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
     # 修改導入路徑，直接從main目錄導入
     from data_fetcher import DataFetcher
-    data_fetcher = DataFetcher(cache_dir=args.cache_dir, use_cache=not args.no_cache, request_delay=args.request_delay)
+    data_fetcher = DataFetcher(
+        api_key=args.api_key,
+        api_secret=args.api_secret,
+        max_klines=args.max_klines,
+        request_delay=args.request_delay,
+        max_workers=args.max_workers,
+        use_proxies=args.use_proxies
+    )
     
     # 獲取交易量最高的交易對
     print("獲取交易量最高的交易對...")
@@ -300,16 +307,17 @@ def main():
     # 獲取所有交易對的數據
     print(f"獲取{len(top_symbols)}個交易對的數據...")
     coin_data = data_fetcher.get_all_data(
-        symbols=top_symbols,
         timeframe=args.timeframe,
         days=args.days,
+        top_n=args.top_n,
+        end_date=end_date_str,
         use_cache=not args.no_cache
     )
     
     # 初始化聚類器
     # 從當前目錄導入
-    from clustering import CryptoClusterer
-    clusterer = CryptoClusterer()
+    from clustering.clustering import ClusteringAnalyzer
+    clusterer = ClusteringAnalyzer(data_fetcher=data_fetcher)
     
     # 運行聚類分析
     print("開始聚類分析...")
@@ -323,8 +331,14 @@ def main():
     if labels is None:
         print("聚類分析失敗。請檢查錯誤信息並調整參數後重試。")
         return
-        
-    print(f"聚類分析完成。結果已保存到 {output_dir}")
+    
+    # 顯示聚類結果統計
+    print("\n聚類結果統計:")
+    cluster_counts = labels.value_counts().sort_index()
+    for cluster, count in cluster_counts.items():
+        print(f"集群 {cluster}: {count} 個幣種 ({count/len(labels)*100:.1f}%)")
+    
+    print(f"\n聚類分析完成。結果已保存到 {output_dir}")
     
 if __name__ == "__main__":
     main() 

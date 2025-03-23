@@ -17,7 +17,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from scipy import stats
 
-# 統計學相關模塊導入嘗試多種可能的導入方式
+# Try multiple import methods for statistics-related modules
 try:
     from scipy.stats.multitest import multipletests
 except ImportError:
@@ -25,7 +25,7 @@ except ImportError:
         from statsmodels.stats.multitest import multipletests
     except ImportError:
         multipletests = None
-        print("警告: 無法導入 multipletests 函數，將不進行多重檢驗校正")
+        print("Warning: Could not import multipletests function, multiple testing correction will not be performed")
 
 import sys
 import os
@@ -60,49 +60,67 @@ class HypothesisTesting:
         self.post_event_window = config.POST_EVENT_WINDOW
         self.significance_level = config.SIGNIFICANCE_LEVEL
         
-        # 输出目录
+        # Output directory
         self.output_dir = "results/hypothesis_testing/default"
     
     def identify_eth_drop_events(self, eth_data: pd.DataFrame, 
                                 drop_threshold: float = config.MIN_DROP_PCT,
-                                window_size: int = config.DETECTION_WINDOW_SIZE) -> List[Dict[str, Any]]:
+                                window_size: int = config.DETECTION_WINDOW_SIZE,
+                                consecutive_drops: int = 1,  # Added parameter: consecutive K-line drops
+                                volume_factor: float = 1.5) -> List[Dict[str, Any]]:
         """
-        Identify significant ETH price drop events
+        Identify significant ETH price drop events, considering volume and continuity
         
         Args:
-            eth_data (pd.DataFrame): ETH price data
-            drop_threshold (float): Threshold for identifying significant drops (negative value)
-            window_size (int): Window size for calculating price changes
+            eth_data: ETH price data
+            drop_threshold: Threshold to identify significant drops (negative value)
+            window_size: Size of window for calculating price changes
+            consecutive_drops: Number of consecutive K-line drops required
+            volume_factor: Volume multiple threshold (relative to average volume)
             
         Returns:
-            List[Dict[str, Any]]: List of event periods with start/end times and metrics
+            List[Dict[str, Any]]: List of event periods, including start/end time and indicators
         """
-        if 'close' not in eth_data.columns:
-            raise ValueError("Data must contain 'close' column")
+        if 'close' not in eth_data.columns or 'volume' not in eth_data.columns:
+            raise ValueError("Data must contain 'close' and 'volume' columns")
         
-        print(f"Analyzing {len(eth_data)} data points for ETH price drops")
+        print(f"Analyzing {len(eth_data)} ETH price data points for drop events")
         print(f"Date range: {eth_data.index.min()} to {eth_data.index.max()}")
-        print(f"Drop threshold: {drop_threshold}, Window size: {window_size}")
+        print(f"Drop threshold: {drop_threshold}, window size: {window_size}, consecutive drops: {consecutive_drops}, volume multiple: {volume_factor}")
         
-        # Calculate percentage changes within the detection window
+        # Calculate percentage change within window
         eth_data['pct_change'] = eth_data['close'].pct_change(window_size)
         
-        # Identify potential event periods where ETH drops at least drop_threshold % in window_size periods
+        # Calculate moving average volume (20 periods)
+        eth_data['volume_ma'] = eth_data['volume'].rolling(20).mean()
+        
+        # Calculate volume ratio
+        eth_data['volume_ratio'] = eth_data['volume'] / eth_data['volume_ma']
+        
+        # Identify consecutive K-line drops
+        eth_data['is_drop'] = eth_data['close'].pct_change() < 0
+        eth_data['consecutive_drops'] = eth_data['is_drop'].rolling(consecutive_drops).sum()
+        
+        # Identify potential event periods
         event_periods = []
         
         for idx, row in eth_data.iterrows():
-            if pd.isna(row['pct_change']):
+            if pd.isna(row['pct_change']) or pd.isna(row['volume_ratio']) or pd.isna(row['consecutive_drops']):
                 continue
                 
-            if row['pct_change'] <= drop_threshold:
-                # Found a drop event
+            # Check if all conditions are met: significant drop, volume amplification, consecutive drops
+            if (row['pct_change'] <= drop_threshold and 
+                row['volume_ratio'] >= volume_factor and 
+                row['consecutive_drops'] >= consecutive_drops):
+                
+                # Find drop event
                 event_time = idx
                 
                 # Define event window boundaries
                 pre_event_start = event_time - timedelta(minutes=self.pre_event_window)
                 post_event_end = event_time + timedelta(minutes=self.post_event_window)
                 
-                # Calculate event metrics
+                # Calculate event indicators
                 event_data = eth_data[(eth_data.index >= pre_event_start) & (eth_data.index <= post_event_end)]
                 if not event_data.empty:
                     pre_event_price = eth_data.loc[pre_event_start:event_time]['close'].iloc[0]
@@ -118,10 +136,12 @@ class HypothesisTesting:
                         'pre_event_price': pre_event_price,
                         'event_price': event_price,
                         'post_event_price': post_event_price,
-                        'drop_pct': drop_pct
+                        'drop_pct': drop_pct,
+                        'volume_ratio': row['volume_ratio'],
+                        'consecutive_drops': row['consecutive_drops']
                     })
         
-        # Filter out overlapping events
+        # Filter overlapping events
         filtered_events = self._filter_overlapping_events(event_periods)
         
         print(f"Identified {len(filtered_events)} ETH drop events")
@@ -226,12 +246,12 @@ class HypothesisTesting:
             pre_returns = pre_event_returns[symbol]
             post_returns = post_event_returns[symbol]
             
-            # 最小样本量要求
+            # Minimum sample size requirement
             min_sample_size = 5
             if len(pre_returns) < min_sample_size or len(post_returns) < min_sample_size:
                 continue
             
-            # 异常值处理 - 使用百分位数截断极端值
+            # Outlier handling - use percentile truncation for extreme values
             lower_percentile = 1
             upper_percentile = 99
             
@@ -243,38 +263,73 @@ class HypothesisTesting:
             pre_returns_filtered = [x for x in pre_returns if pre_lower <= x <= pre_upper]
             post_returns_filtered = [x for x in post_returns if post_lower <= x <= post_upper]
             
-            # 至少需要一定数量的有效观测值
+            # At least need a certain number of valid observations
             if len(pre_returns_filtered) < min_sample_size or len(post_returns_filtered) < min_sample_size:
                 continue
                 
-            # 计算基本统计量
+            # Calculate basic statistics
             pre_mean = np.mean(pre_returns_filtered)
             post_mean = np.mean(post_returns_filtered)
             pre_std = np.std(pre_returns_filtered)
             post_std = np.std(post_returns_filtered)
             mean_diff = post_mean - pre_mean
             
-            # Paired t-test
-            t_stat, p_value = stats.ttest_rel(post_returns_filtered, pre_returns_filtered)
+            # Ensure two arrays have the same length to prevent broadcasting error
+            min_length = min(len(pre_returns_filtered), len(post_returns_filtered))
+            length_diff = abs(len(pre_returns_filtered) - len(post_returns_filtered))
             
-            # 计算效应大小 (Cohen's d)
-            # 对于配对样本，使用标准化平均差异
+            # If length difference is too large, use independent sample t-test
+            if length_diff > min_length * 0.3:  # If difference exceeds 30%
+                try:
+                    t_stat, p_value = stats.ttest_ind(post_returns_filtered, pre_returns_filtered, equal_var=False)
+                    test_type = "Independent t-test (unequal length)"
+                except Exception as e:
+                    print(f"Independent t-test failed for {symbol}: {e}")
+                    t_stat, p_value = np.nan, np.nan
+                    test_type = "Failed"
+            else:
+                # For paired samples, ensure lengths are the same
+                pre_returns_cut = np.array(pre_returns_filtered[:min_length])
+                post_returns_cut = np.array(post_returns_filtered[:min_length])
+                
+                # Paired t-test
+                try:
+                    t_stat, p_value = stats.ttest_rel(post_returns_cut, pre_returns_cut)
+                    test_type = "Paired t-test"
+                except Exception as e:
+                    print(f"Paired t-test failed for {symbol}: {e}")
+                    # Fallback to independent sample t-test
+                    try:
+                        t_stat, p_value = stats.ttest_ind(post_returns_filtered, pre_returns_filtered, equal_var=False)
+                        test_type = "Independent t-test (fallback)"
+                    except Exception as e2:
+                        print(f"Independent t-test also failed for {symbol}: {e2}")
+                        t_stat, p_value = np.nan, np.nan
+                        test_type = "Failed"
+            
+            # Calculate effect size (Cohen's d)
+            # For paired samples, use standardized average difference
             pooled_std = np.sqrt((pre_std**2 + post_std**2) / 2)
-            if pooled_std != 0:  # 避免除以零
+            if pooled_std != 0:  # Avoid division by zero
                 effect_size, effect_interpretation = calculate_effect_size(mean_diff, pooled_std)
             else:
-                effect_size, effect_interpretation = 0, "無法計算"
+                effect_size, effect_interpretation = 0, "Cannot calculate"
             
             # Wilcoxon signed-rank test (non-parametric alternative)
             try:
-                w_stat, w_p_value = stats.wilcoxon(post_returns_filtered, pre_returns_filtered)
-            except:
+                # For Wilcoxon test also ensure lengths are the same
+                pre_returns_cut = np.array(pre_returns_filtered[:min_length])
+                post_returns_cut = np.array(post_returns_filtered[:min_length])
+                w_stat, w_p_value = stats.wilcoxon(post_returns_cut, pre_returns_cut)
+            except Exception as e:
+                print(f"Wilcoxon test failed for {symbol}: {e}")
                 w_stat, w_p_value = np.nan, np.nan
             
             # Kolmogorov-Smirnov test for distribution difference
             try:
                 ks_stat, ks_p_value = stats.ks_2samp(post_returns_filtered, pre_returns_filtered)
-            except:
+            except Exception as e:
+                print(f"KS test failed for {symbol}: {e}")
                 ks_stat, ks_p_value = np.nan, np.nan
             
             # Store results
@@ -288,6 +343,7 @@ class HypothesisTesting:
                 'mean_diff': mean_diff,
                 't_stat': t_stat,
                 'p_value': p_value,
+                'test_type': test_type,
                 'effect_size': effect_size,
                 'effect_interpretation': effect_interpretation,
                 'significant': p_value < self.significance_level,
@@ -307,7 +363,7 @@ class HypothesisTesting:
                 results_df['corrected_p_value'] = corrected_p_values
                 results_df['significant_corrected'] = results_df['corrected_p_value'] < self.significance_level
             else:
-                # 如果multipletests不可用，則使用原始p值
+                # If multipletests is not available, use original p-values
                 results_df['corrected_p_value'] = results_df['p_value']
                 results_df['significant_corrected'] = results_df['significant']
             
@@ -427,44 +483,124 @@ class HypothesisTesting:
             plt.savefig(f'{self.output_dir}/distribution_{symbol}.png', dpi=300)
             plt.close()
     
-    def summarize_results(self, results_df: pd.DataFrame) -> None:
+    def summarize_results(self, results_df: pd.DataFrame, rebound_df: pd.DataFrame, strategy_df: pd.DataFrame) -> None:
         """
-        Summarize hypothesis testing results
+        Generate result summary
         
         Args:
-            results_df (pd.DataFrame): DataFrame with test results
+            results_df: Hypothesis testing results
+            rebound_df: Rebound time analysis results
+            strategy_df: Trading strategy evaluation results
         """
-        if results_df.empty:
-            print("No results to summarize")
-            return
+        summary_file = f"{self.output_dir}/analysis_summary.txt"
+        
+        with open(summary_file, 'w') as f:
+            f.write("===== Crypto Market Analysis Summary =====\n\n")
             
-        # Count significant results
-        significant = results_df[results_df['significant_corrected']]
+            # Hypothesis testing summary
+            f.write("1. Return Difference Analysis\n")
+            f.write("-----------------------\n")
+            
+            if not results_df.empty:
+                significant_results = results_df[results_df['significant_corrected']]
+                positive_sig = significant_results[significant_results['mean_diff'] > 0]
+                negative_sig = significant_results[significant_results['mean_diff'] < 0]
+                
+                f.write(f"Analyzed {len(results_df)} cryptocurrencies\n")
+                f.write(f"Statistically significant results: {len(significant_results)} ({len(significant_results)/len(results_df)*100:.1f}%)\n")
+                f.write(f"Positive significant difference: {len(positive_sig)} ({len(positive_sig)/len(significant_results)*100:.1f}% of significant results)\n")
+                f.write(f"Negative significant difference: {len(negative_sig)} ({len(negative_sig)/len(significant_results)*100:.1f}% of significant results)\n\n")
+                
+                f.write("Top 5 cryptocurrencies with largest return difference:\n")
+                for _, row in results_df.sort_values('mean_diff', ascending=False).head(5).iterrows():
+                    f.write(f"  {row['symbol']}: {row['mean_diff']:.2f}% (p={row['corrected_p_value']:.4f})\n")
+                
+                f.write("\nTop 5 cryptocurrencies with smallest return difference:\n")
+                for _, row in results_df.sort_values('mean_diff').head(5).iterrows():
+                    f.write(f"  {row['symbol']}: {row['mean_diff']:.2f}% (p={row['corrected_p_value']:.4f})\n")
+            else:
+                f.write("No usable hypothesis testing results\n")
+            
+            # Rebound time analysis summary
+            f.write("\n\n2. Rebound Time Analysis\n")
+            f.write("-----------------------\n")
+            
+            if not rebound_df.empty:
+                faster_coins = rebound_df[rebound_df['faster_pct'] > 50]
+                
+                f.write(f"Analyzed {len(rebound_df)} cryptocurrencies' rebound time\n")
+                f.write(f"Coins that rebound earlier than ETH: {len(faster_coins)} ({len(faster_coins)/len(rebound_df)*100:.1f}%)\n\n")
+                
+                f.write("Top 5 cryptocurrencies that rebound fastest:\n")
+                for symbol, row in rebound_df.head(5).iterrows():
+                    f.write(f"  {symbol}: Earlier rebound percentage compared to ETH {row['faster_pct']:.1f}%, Average time difference {row['avg_time_diff']:.1f} minutes\n")
+            else:
+                f.write("No usable rebound time analysis results\n")
+            
+            # Trading strategy evaluation summary
+            f.write("\n\n3. Trading Strategy Evaluation\n")
+            f.write("-----------------------\n")
+            
+            if not strategy_df.empty:
+                profitable_coins = strategy_df[strategy_df['total_profit'] > 0]
+                
+                f.write(f"Evaluated {len(strategy_df)} cryptocurrencies' trading strategies\n")
+                f.write(f"Profitable coins: {len(profitable_coins)} ({len(profitable_coins)/len(strategy_df)*100:.1f}%)\n")
+                
+                if not profitable_coins.empty:
+                    avg_win_rate = profitable_coins['win_rate'].mean()
+                    avg_profit = profitable_coins['avg_profit'].mean()
+                    f.write(f"Average win rate of profitable coins: {avg_win_rate:.1f}%\n")
+                    f.write(f"Average profit of profitable coins: {avg_profit:.2f}%\n\n")
+                
+                f.write("Top 5 cryptocurrencies with best strategy performance:\n")
+                for symbol, row in strategy_df.head(5).iterrows():
+                    f.write(f"  {symbol}: Total profit {row['total_profit']:.1f}%, Win rate {row['win_rate']:.1f}%, Average holding time {row['avg_holding']:.1f} minutes\n")
+            else:
+                f.write("No usable trading strategy evaluation results\n")
+            
+            # Comprehensive advice
+            f.write("\n\n4. Comprehensive Advice\n")
+            f.write("-----------------------\n")
+            
+            if not results_df.empty and not rebound_df.empty and not strategy_df.empty:
+                # Find coins that meet all three conditions:
+                # 1. Significant positive return difference
+                # 2. Rebound earlier than ETH
+                # 3. Trading strategy profitable
+                
+                significant_symbols = set(results_df[results_df['significant_corrected'] & (results_df['mean_diff'] > 0)]['symbol'])
+                faster_symbols = set(rebound_df[rebound_df['faster_pct'] > 50].index)
+                profitable_symbols = set(strategy_df[strategy_df['total_profit'] > 0].index)
+                
+                recommended_symbols = significant_symbols.intersection(faster_symbols).intersection(profitable_symbols)
+                
+                if recommended_symbols:
+                    f.write("Comprehensive analysis results, the following coins performed best after ETH drop, recommended to consider first:\n")
+                    
+                    # Sort by strategy total profit
+                    recommended_df = strategy_df.loc[list(recommended_symbols)].sort_values('total_profit', ascending=False)
+                    
+                    for symbol, row in recommended_df.iterrows():
+                        result_row = results_df[results_df['symbol'] == symbol].iloc[0]
+                        rebound_row = rebound_df.loc[symbol]
+                        
+                        f.write(f"  {symbol}:\n")
+                        f.write(f"    - Return difference: +{result_row['mean_diff']:.2f}% (p={result_row['corrected_p_value']:.4f})\n")
+                        f.write(f"    - Rebound earlier than ETH: {rebound_row['faster_pct']:.1f}% in events\n")
+                        f.write(f"    - Average rebound time difference: {rebound_row['avg_time_diff']:.1f} minutes\n")
+                        f.write(f"    - Trading strategy win rate: {row['win_rate']:.1f}%\n")
+                        f.write(f"    - Trading strategy total profit: {row['total_profit']:.1f}%\n")
+                        f.write(f"    - Average holding time: {row['avg_holding']:.1f} minutes\n\n")
+                else:
+                    f.write("No coins that meet all conditions, recommended:\n")
+                    f.write("1. Consider loosening selection criteria\n")
+                    f.write("2. Increase historical data range for analysis\n")
+                    f.write("3. Adjust ETH drop threshold or event window size\n")
+            else:
+                f.write("Insufficient data, cannot provide comprehensive advice\n")
         
-        print("\n=== Hypothesis Testing Results Summary ===")
-        print(f"Total coins analyzed: {len(results_df)}")
-        print(f"Coins with significant change: {len(significant)} ({len(significant)/len(results_df)*100:.1f}%)")
-        
-        # Count positive and negative changes
-        positive_sig = significant[significant['mean_diff'] > 0]
-        negative_sig = significant[significant['mean_diff'] < 0]
-        
-        print(f"Coins with significant positive change: {len(positive_sig)} ({len(positive_sig)/len(significant)*100:.1f}% of significant)")
-        print(f"Coins with significant negative change: {len(negative_sig)} ({len(negative_sig)/len(significant)*100:.1f}% of significant)")
-        
-        # Top 5 positive changes
-        if not positive_sig.empty:
-            print("\n--- Top 5 Positive Changes ---")
-            top_positive = positive_sig.sort_values('mean_diff', ascending=False).head(5)
-            for _, row in top_positive.iterrows():
-                print(f"{row['symbol']}: {row['mean_diff']:.2f}% (p={row['corrected_p_value']:.4f})")
-        
-        # Top 5 negative changes
-        if not negative_sig.empty:
-            print("\n--- Top 5 Negative Changes ---")
-            top_negative = negative_sig.sort_values('mean_diff', ascending=True).head(5)
-            for _, row in top_negative.iterrows():
-                print(f"{row['symbol']}: {row['mean_diff']:.2f}% (p={row['corrected_p_value']:.4f})")
+        print(f"Results summary saved to {summary_file}")
     
     def run_hypothesis_testing(self, days: int = 30, timeframe: str = '1m', 
                              drop_threshold: float = config.MIN_DROP_PCT, 
@@ -474,53 +610,66 @@ class HypothesisTesting:
                              use_cache: bool = True,
                              pre_event_window: int = None,
                              post_event_window: int = None,
+                             consecutive_drops: int = 1,
+                             volume_factor: float = 1.5,
+                             rebound_threshold: float = 0.005,
+                             take_profit_pct: float = 0.03,
+                             stop_loss_pct: float = 0.02,
                              progress_callback: Optional[Callable] = None,
-                             output_dir: Optional[str] = None) -> pd.DataFrame:
+                             output_dir: Optional[str] = None) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """
-        運行假設檢驗分析
+        Run hypothesis testing analysis and trading strategy evaluation
 
         Args:
-            days: 分析天數
-            timeframe: 時間框架('1m', '5m', '15m', '1h', '4h')
-            drop_threshold: 認定ETH價格顯著下跌的閾值 (負數，例如-0.01表示1%的下跌)
-            window_size: 檢測窗口大小
-            top_n: 分析排名前N的幣種 
-            end_date: 結束日期，格式為'YYYY-MM-DD'
-            use_cache: 是否使用緩存數據
-            pre_event_window: 事件前窗口（分鐘）
-            post_event_window: 事件後窗口（分鐘）
-            progress_callback: 進度回調函數
-            output_dir: 輸出目錄
+            days: Analysis days
+            timeframe: Time frame ('1m', '5m', '15m', '1h', '4h')
+            drop_threshold: Threshold to identify significant ETH price drop (negative value, e.g., -0.01 for 1% drop)
+            window_size: Detection window size
+            top_n: Analyze top N coins
+            end_date: End date, format 'YYYY-MM-DD'
+            use_cache: Whether to use cached data
+            pre_event_window: Event pre-window (minutes)
+            post_event_window: Event post-window (minutes)
+            consecutive_drops: Number of consecutive K-line drops
+            volume_factor: Volume multiple threshold
+            rebound_threshold: Define rebound threshold
+            take_profit_pct: Take profit percentage
+            stop_loss_pct: Stop loss percentage
+            progress_callback: Progress callback function
+            output_dir: Output directory
 
         Returns:
-            pd.DataFrame: DataFrame with test results
+            Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]: 
+                - Hypothesis testing results
+                - Rebound time analysis results
+                - Trading strategy evaluation results
         """
-        # 更新事件窗口大小(如果提供)
+        # Update event window size (if provided)
         if pre_event_window is not None:
             self.pre_event_window = pre_event_window
         if post_event_window is not None:
             self.post_event_window = post_event_window
             
-        # 设置输出目录
+        # Set output directory
         if output_dir:
             self.output_dir = output_dir
             
-        print(f"Running hypothesis testing for {days} days with {timeframe} data")
+        print(f"Running hypothesis testing analysis, time range: {days} days, time frame: {timeframe}")
         
-        # Calculate dates
+        # Calculate date
         if end_date is None:
             end_date = datetime.now().strftime('%Y-%m-%d')
             
-        # Add extra days to allow for event windows
+        # Add extra days to allow event window
         extra_days = max(2, (self.pre_event_window + self.post_event_window) // (60 * 24) + 1)
         start_date = (datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=days+extra_days)).strftime('%Y-%m-%d')
         
         print(f"Analysis period: {start_date} to {end_date}")
-        print(f"Pre-event window: {self.pre_event_window} minutes, Post-event window: {self.post_event_window} minutes")
+        print(f"Event pre-window: {self.pre_event_window} minutes, Event post-window: {self.post_event_window} minutes")
         
         # Get ETH data
         if progress_callback:
-            progress_callback(0.15, "正在獲取ETH歷史數據...")
+            progress_callback(0.10, "Getting ETH historical data...")
             
         eth_data = self.data_fetcher.fetch_historical_data(
             symbol=self.reference_symbol, 
@@ -531,69 +680,460 @@ class HypothesisTesting:
         )
         
         if eth_data.empty:
-            print(f"Failed to get data for {self.reference_symbol}")
-            return pd.DataFrame()
+            print(f"Could not get data for {self.reference_symbol}")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
         # Identify ETH drop events
         if progress_callback:
-            progress_callback(0.25, "正在識別ETH下跌事件...")
+            progress_callback(0.20, "Identifying ETH drop events...")
             
-        self.event_periods = self.identify_eth_drop_events(eth_data, drop_threshold, window_size)
+        self.event_periods = self.identify_eth_drop_events(
+            eth_data, 
+            drop_threshold, 
+            window_size,
+            consecutive_drops,
+            volume_factor
+        )
         
         if not self.event_periods:
             print("No significant ETH drop events identified")
-            return pd.DataFrame()
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
         
-        # Get data for top volume symbols
+        # Get all coin data
         if progress_callback:
-            progress_callback(0.35, "正在獲取加密貨幣數據...")
+            progress_callback(0.30, "Getting cryptocurrency data...")
             
         coin_data = self.data_fetcher.get_all_data(
             timeframe=timeframe,
             days=days,
             end_date=end_date,
             use_cache=use_cache,
-            include_reference=True  # 确保包含ETH
+            include_reference=True  # Ensure include ETH
         )
         
         # Calculate returns
         if progress_callback:
-            progress_callback(0.50, "正在計算事件前後收益率...")
+            progress_callback(0.40, "Calculating event pre-post returns...")
             
         self.pre_event_returns, self.post_event_returns = self.calculate_returns(coin_data, self.event_periods)
         
         # Conduct statistical tests
         if progress_callback:
-            progress_callback(0.70, "正在進行統計檢驗...")
+            progress_callback(0.50, "Conducting statistical tests...")
             
         results_df = self.conduct_statistical_tests(self.pre_event_returns, self.post_event_returns)
+        
+        # Analyze rebound time
+        if progress_callback:
+            progress_callback(0.60, "Analyzing rebound time difference...")
+        
+        rebound_df = self.analyze_rebound_timing(coin_data, self.event_periods, rebound_threshold)
+        
+        # Evaluate trading strategy
+        if progress_callback:
+            progress_callback(0.70, "Evaluating trading strategy...")
+        
+        strategy_df = self.evaluate_trading_strategy(
+            coin_data, 
+            self.event_periods, 
+            rebound_df, 
+            top_n,
+            take_profit_pct,
+            stop_loss_pct
+        )
         
         # Save results
         results_file = f"{self.output_dir}/hypothesis_testing_results.csv"
         results_df.to_csv(results_file)
-        print(f"Saved results to {results_file}")
+        
+        rebound_file = f"{self.output_dir}/rebound_analysis_results.csv"
+        rebound_df.to_csv(rebound_file)
+        
+        strategy_file = f"{self.output_dir}/strategy_evaluation_results.csv"
+        strategy_df.to_csv(strategy_file)
+        
+        print(f"Results saved to {self.output_dir}")
         
         # Visualize results
         if progress_callback:
-            progress_callback(0.85, "正在生成可視化圖表...")
+            progress_callback(0.80, "Generating visualization charts...")
             
         self.visualize_results(results_df, top_n)
         
-        # Calculate summary
-        if progress_callback:
-            progress_callback(0.95, "正在生成結果摘要...")
-            
-        self.summarize_results(results_df)
+        # Generate rebound time and trading strategy visualization
+        self.visualize_rebound_analysis(rebound_df, top_n)
+        self.visualize_strategy_results(strategy_df, top_n)
         
-        # Create distribution plots for notable symbols
-        if not results_df.empty:
-            significant = results_df[results_df['p_value'] < self.significance_level]
-            if not significant.empty:
-                # Create distribution plots for top 5 highest absolute mean difference
-                top_symbols = significant.reindex(significant['mean_diff'].abs().sort_values(ascending=False).index).head(5)['symbol'].tolist()
-                self.create_distribution_plots(self.pre_event_returns, self.post_event_returns, top_symbols)
+        # Generate summary
+        if progress_callback:
+            progress_callback(0.90, "Generating result summary...")
+            
+        self.summarize_results(results_df, rebound_df, strategy_df)
         
         if progress_callback:
-            progress_callback(1.0, "分析完成！")
+            progress_callback(1.0, "Analysis completed!")
             
-        return results_df 
+        return results_df, rebound_df, strategy_df
+
+    def analyze_rebound_timing(self, coin_data: Dict[str, pd.DataFrame], 
+                              event_periods: List[Dict[str, Any]],
+                              rebound_threshold: float = 0.005) -> pd.DataFrame:
+        """
+        Analyze ETH and altcoin rebound time difference after ETH price drops
+        
+        Args:
+            coin_data: Coin data dictionary
+            event_periods: List of event periods
+            rebound_threshold: Define rebound threshold (e.g., 0.5% for 0.5% rebound)
+            
+        Returns:
+            pd.DataFrame: DataFrame with rebound time analysis results
+        """
+        rebound_results = []
+        
+        for event in event_periods:
+            event_time = event['event_time']
+            post_end = event['post_event_end']
+            
+            # Get ETH data
+            eth_df = coin_data[self.reference_symbol]
+            eth_post_event = eth_df[(eth_df.index >= event_time) & (eth_df.index <= post_end)]
+            
+            if eth_post_event.empty:
+                continue
+                
+            # Get ETH price at event time
+            eth_event_price = eth_post_event.iloc[0]['close']
+            
+            # Calculate ETH rebound time
+            eth_rebound_time = None
+            for idx, row in eth_post_event.iterrows():
+                if row['close'] >= eth_event_price * (1 + rebound_threshold):
+                    eth_rebound_time = idx
+                    break
+            
+            # If ETH didn't rebound within observation period, skip this event
+            if eth_rebound_time is None:
+                continue
+            
+            # Calculate ETH rebound required minutes
+            eth_rebound_minutes = (eth_rebound_time - event_time).total_seconds() / 60
+            
+            # Analyze each altcoin
+            for symbol, df in coin_data.items():
+                if symbol == self.reference_symbol:
+                    continue
+                    
+                # Get altcoin event post-data
+                coin_post_event = df[(df.index >= event_time) & (df.index <= post_end)]
+                
+                if coin_post_event.empty:
+                    continue
+                    
+                # Get altcoin price at event time
+                coin_event_price = coin_post_event.iloc[0]['close']
+                
+                # Calculate altcoin rebound time
+                coin_rebound_time = None
+                for idx, row in coin_post_event.iterrows():
+                    if row['close'] >= coin_event_price * (1 + rebound_threshold):
+                        coin_rebound_time = idx
+                        break
+                
+                # If altcoin rebounded within observation period
+                if coin_rebound_time is not None:
+                    # Calculate altcoin rebound required minutes
+                    coin_rebound_minutes = (coin_rebound_time - event_time).total_seconds() / 60
+                    
+                    # Calculate time difference with ETH (negative value means earlier rebound)
+                    time_difference = coin_rebound_minutes - eth_rebound_minutes
+                    
+                    rebound_results.append({
+                        'event_time': event_time,
+                        'symbol': symbol,
+                        'eth_rebound_minutes': eth_rebound_minutes,
+                        'coin_rebound_minutes': coin_rebound_minutes,
+                        'time_difference': time_difference,
+                        'faster_than_eth': time_difference < 0,
+                        'drop_pct': event['drop_pct']
+                    })
+        
+        # Convert to DataFrame
+        rebound_df = pd.DataFrame(rebound_results)
+        
+        if not rebound_df.empty:
+            # Calculate each coin's percentage of events rebounding earlier than ETH
+            rebound_summary = rebound_df.groupby('symbol').agg(
+                total_events=('event_time', 'count'),
+                faster_events=('faster_than_eth', 'sum'),
+                avg_time_diff=('time_difference', 'mean'),
+                min_time_diff=('time_difference', 'min'),
+                max_time_diff=('time_difference', 'max')
+            )
+            
+            rebound_summary['faster_pct'] = (rebound_summary['faster_events'] / rebound_summary['total_events']) * 100
+            
+            # Sort by earlier rebound percentage
+            rebound_summary = rebound_summary.sort_values('faster_pct', ascending=False)
+        else:
+            rebound_summary = pd.DataFrame()
+        
+        return rebound_summary 
+
+    def evaluate_trading_strategy(self, coin_data: Dict[str, pd.DataFrame], 
+                                 event_periods: List[Dict[str, Any]],
+                                 rebound_summary: pd.DataFrame,
+                                 top_n: int = 5,
+                                 take_profit_pct: float = 0.03,
+                                 stop_loss_pct: float = 0.02) -> pd.DataFrame:
+        """
+        Evaluate trading strategy based on ETH drop events
+        
+        Args:
+            coin_data: Coin data dictionary
+            event_periods: List of event periods
+            rebound_summary: Rebound time analysis results
+            top_n: Select top N coins that rebound fastest
+            take_profit_pct: Take profit percentage
+            stop_loss_pct: Stop loss percentage
+            
+        Returns:
+            pd.DataFrame: Strategy evaluation results
+        """
+        if rebound_summary.empty:
+            return pd.DataFrame()
+        
+        # Select top N coins that rebound fastest
+        top_coins = rebound_summary.head(top_n).index.tolist()
+        
+        strategy_results = []
+        
+        for event in event_periods:
+            event_time = event['event_time']
+            post_end = event['post_event_end']
+            
+            for symbol in top_coins:
+                if symbol not in coin_data:
+                    continue
+                    
+                df = coin_data[symbol]
+                post_event_data = df[(df.index >= event_time) & (df.index <= post_end)]
+                
+                if post_event_data.empty:
+                    continue
+                    
+                # Simulate entering at ETH drop event
+                entry_price = post_event_data.iloc[0]['close']
+                entry_time = post_event_data.index[0]
+                
+                # Calculate take profit and stop loss prices
+                take_profit_price = entry_price * (1 + take_profit_pct)
+                stop_loss_price = entry_price * (1 - stop_loss_pct)
+                
+                # Simulate trading results
+                exit_price = None
+                exit_time = None
+                profit_pct = None
+                hit_target = None
+                
+                for idx, row in post_event_data.iterrows():
+                    if idx == entry_time:
+                        continue
+                        
+                    # Check if reach take profit or stop loss
+                    if row['high'] >= take_profit_price:
+                        exit_price = take_profit_price
+                        exit_time = idx
+                        profit_pct = take_profit_pct * 100
+                        hit_target = True
+                        break
+                    elif row['low'] <= stop_loss_price:
+                        exit_price = stop_loss_price
+                        exit_time = idx
+                        profit_pct = -stop_loss_pct * 100
+                        hit_target = False
+                        break
+                
+                # If didn't reach take profit or stop loss, use observation period end price
+                if exit_price is None:
+                    exit_price = post_event_data.iloc[-1]['close']
+                    exit_time = post_event_data.index[-1]
+                    profit_pct = ((exit_price / entry_price) - 1) * 100
+                    hit_target = profit_pct > 0
+                
+                # Calculate holding time (minutes)
+                holding_period = (exit_time - entry_time).total_seconds() / 60
+                
+                strategy_results.append({
+                    'event_time': event_time,
+                    'symbol': symbol,
+                    'entry_time': entry_time,
+                    'entry_price': entry_price,
+                    'exit_time': exit_time,
+                    'exit_price': exit_price,
+                    'profit_pct': profit_pct,
+                    'holding_period': holding_period,
+                    'hit_target': hit_target
+                })
+        
+        # Convert to DataFrame
+        strategy_df = pd.DataFrame(strategy_results)
+        
+        if not strategy_df.empty:
+            # Calculate each coin's strategy performance
+            strategy_summary = strategy_df.groupby('symbol').agg(
+                total_trades=('event_time', 'count'),
+                win_trades=('hit_target', 'sum'),
+                avg_profit=('profit_pct', 'mean'),
+                total_profit=('profit_pct', 'sum'),
+                max_profit=('profit_pct', 'max'),
+                min_profit=('profit_pct', 'min'),
+                avg_holding=('holding_period', 'mean')
+            )
+            
+            strategy_summary['win_rate'] = (strategy_summary['win_trades'] / strategy_summary['total_trades']) * 100
+            
+            # Sort by total profit
+            strategy_summary = strategy_summary.sort_values('total_profit', ascending=False)
+        else:
+            strategy_summary = pd.DataFrame()
+        
+        return strategy_summary 
+
+    def visualize_rebound_analysis(self, rebound_df: pd.DataFrame, top_n: int = 10) -> None:
+        """
+        Visualize rebound time analysis results
+        
+        Args:
+            rebound_df: Rebound time analysis results
+            top_n: Display top N results
+        """
+        if rebound_df.empty:
+            print("No data to visualize")
+            return
+        
+        # Get top coins that rebound fastest
+        top_results = rebound_df.head(top_n)
+        
+        # Create bar chart
+        plt.figure(figsize=(14, 8))
+        
+        # Use color to differentiate percentage of earlier rebound compared to ETH
+        bars = plt.bar(top_results.index, top_results['faster_pct'], 
+                     color=plt.cm.RdYlGn(top_results['faster_pct']/100))
+        
+        # Add labels and title
+        plt.xlabel('Coin')
+        plt.ylabel('Percentage of Earlier Rebound Compared to ETH (%)')
+        plt.title(f'Top {top_n} Coins that Rebound Faster (Compared to ETH)')
+        plt.xticks(rotation=45, ha='right')
+        plt.axhline(y=50, color='r', linestyle='--', alpha=0.3)
+        
+        # Add data labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{height:.1f}%', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        plt.savefig(f"{self.output_dir}/rebound_analysis_top{top_n}.png", dpi=300)
+        plt.close()
+        
+        # Create average time difference chart
+        plt.figure(figsize=(14, 8))
+        bars = plt.bar(top_results.index, top_results['avg_time_diff'], 
+                     color=['green' if x < 0 else 'red' for x in top_results['avg_time_diff']])
+        
+        plt.xlabel('Coin')
+        plt.ylabel('Average Rebound Time Difference (Minutes)')
+        plt.title(f'Top {top_n} Coins Average Rebound Time Difference (Compared to ETH, Negative Value Means Earlier Rebound)')
+        plt.xticks(rotation=45, ha='right')
+        plt.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+        
+        # Add data labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.3 if height >= 0 else height - 0.8,
+                    f'{height:.1f}', ha='center', va='bottom' if height >= 0 else 'top')
+        
+        plt.tight_layout()
+        plt.savefig(f"{self.output_dir}/rebound_time_diff_top{top_n}.png", dpi=300)
+        plt.close()
+
+    def visualize_strategy_results(self, strategy_df: pd.DataFrame, top_n: int = 10) -> None:
+        """
+        Visualize trading strategy evaluation results
+        
+        Args:
+            strategy_df: Trading strategy evaluation results
+            top_n: Display top N results
+        """
+        if strategy_df.empty:
+            print("No data to visualize")
+            return
+        
+        # Get top coins with best performance
+        top_results = strategy_df.head(top_n)
+        
+        # Create win rate chart
+        plt.figure(figsize=(14, 8))
+        bars = plt.bar(top_results.index, top_results['win_rate'], 
+                     color=plt.cm.RdYlGn(top_results['win_rate']/100))
+        
+        plt.xlabel('Coin')
+        plt.ylabel('Win Rate (%)')
+        plt.title(f'Top {top_n} Coins Trading Strategy Win Rate')
+        plt.xticks(rotation=45, ha='right')
+        plt.axhline(y=50, color='r', linestyle='--', alpha=0.3)
+        
+        # Add data labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{height:.1f}%', ha='center', va='bottom')
+        
+        plt.tight_layout()
+        plt.savefig(f"{self.output_dir}/strategy_win_rate_top{top_n}.png", dpi=300)
+        plt.close()
+        
+        # Create average profit chart
+        plt.figure(figsize=(14, 8))
+        bars = plt.bar(top_results.index, top_results['avg_profit'], 
+                     color=['green' if x > 0 else 'red' for x in top_results['avg_profit']])
+        
+        plt.xlabel('Coin')
+        plt.ylabel('Average Profit (%)')
+        plt.title(f'Top {top_n} Coins Trading Strategy Average Profit')
+        plt.xticks(rotation=45, ha='right')
+        plt.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+        
+        # Add data labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 0.1 if height >= 0 else height - 0.3,
+                    f'{height:.2f}%', ha='center', va='bottom' if height >= 0 else 'top')
+        
+        plt.tight_layout()
+        plt.savefig(f"{self.output_dir}/strategy_avg_profit_top{top_n}.png", dpi=300)
+        plt.close()
+        
+        # Create total profit chart
+        plt.figure(figsize=(14, 8))
+        bars = plt.bar(top_results.index, top_results['total_profit'], 
+                     color=['green' if x > 0 else 'red' for x in top_results['total_profit']])
+        
+        plt.xlabel('Coin')
+        plt.ylabel('Total Profit (%)')
+        plt.title(f'Top {top_n} Coins Trading Strategy Total Profit')
+        plt.xticks(rotation=45, ha='right')
+        plt.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+        
+        # Add data labels
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2., height + 1 if height >= 0 else height - 3,
+                    f'{height:.1f}%', ha='center', va='bottom' if height >= 0 else 'top')
+        
+        plt.tight_layout()
+        plt.savefig(f"{self.output_dir}/strategy_total_profit_top{top_n}.png", dpi=300)
+        plt.close() 

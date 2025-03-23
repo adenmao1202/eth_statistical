@@ -1,0 +1,12 @@
+{
+    "drop_threshold": -0.0052,
+    "consecutive_drops": 2,
+    "volume_factor": 1.1907,
+    "rebound_threshold": 0.0133,
+    "take_profit_pct": 0.0333,
+    "stop_loss_pct": 0.0052,
+    "pre_event_window": 15,
+    "post_event_window": 45,
+    "timeframe": "5m",
+    "days": 30
+}
