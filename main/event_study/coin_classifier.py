@@ -35,223 +35,108 @@ class CoinClassifier:
         """
         self.data_fetcher = data_fetcher
         self.logger = logging.getLogger(__name__)
-        
-    def classify_by_market_cap(self, symbols: List[str], tiers: int = 3) -> Dict[str, List[str]]:
-        """
-        Classify coins by market capitalization
-        
-        Args:
-            symbols: List of coin symbols
-            tiers: Number of classification tiers
-            
-        Returns:
-            Dict[str, List[str]]: Dictionary of coins classified by market cap
-        """
-        self.logger.info(f"Classifying {len(symbols)} symbols by market cap into {tiers} tiers")
-        
-        # Since we lack direct market cap API, we use a simple proxy method:
-        # 1. Use get_top_volume_symbols to get volume ranking
-        # 2. Assume volume correlates with market cap
-        try:
-            # Use standard top 100 pairs as proxy
-            ranked_symbols = self.data_fetcher.get_top_volume_symbols(100)
-            
-            # Build ranking dictionary (symbol -> rank)
-            symbol_ranks = {s: i for i, s in enumerate(ranked_symbols)}
-            
-            # Sort input symbols by "market cap" (actually volume proxy)
-            symbols_with_ranks = []
-            for symbol in symbols:
-                if symbol in symbol_ranks:
-                    symbols_with_ranks.append((symbol, symbol_ranks[symbol]))
-                else:
-                    # For symbols not in ranking list, give lower priority
-                    symbols_with_ranks.append((symbol, 999))
-            
-            # Sort by rank
-            symbols_with_ranks.sort(key=lambda x: x[1])
-            
-            # Get symbols-only sorted list
-            sorted_symbols = [item[0] for item in symbols_with_ranks]
-            
-        except Exception as e:
-            self.logger.warning(f"Failed to use volume ranking as market cap proxy: {e}, using input symbol list directly")
-            sorted_symbols = symbols.copy()
-        
-        # Divide into N tiers
-        result = {}
-        if not sorted_symbols:
-            return {"large_cap": []}
-            
-        symbols_per_tier = max(1, len(sorted_symbols) // tiers)
-        
-        for i in range(tiers):
-            start_idx = i * symbols_per_tier
-            # For the last tier, take all remaining
-            end_idx = None if i == tiers - 1 else (i + 1) * symbols_per_tier
-            
-            tier_name = ""
-            if i == 0:
-                tier_name = "large_cap"
-            elif i == tiers - 1:
-                tier_name = "small_cap"
-            else:
-                tier_name = f"mid_cap_{i}"
-                
-            result[tier_name] = sorted_symbols[start_idx:end_idx]
-            
-        return result
     
-    def classify_by_volume(self, symbols: List[str], days: int = 30, timeframe: str = '1d', tiers: int = 3) -> Dict[str, List[str]]:
+    def classify_by_volume(self, symbols: List[str], days: int = 30, timeframe: str = '1h', tiers: int = 3) -> Dict[str, List[str]]:
         """
         Classify coins by trading volume
         
         Args:
-            symbols: List of coin symbols
-            days: Analysis period in days
-            timeframe: Time interval
-            tiers: Number of classification tiers
+            symbols: List of symbols to classify
+            days: Number of days to analyze
+            timeframe: Data timeframe
+            tiers: Number of tiers to create
             
         Returns:
-            Dict[str, List[str]]: Dictionary of coins classified by volume
+            Dict[str, List[str]]: Classification results
         """
-        self.logger.info(f"Classifying {len(symbols)} symbols by volume into {tiers} tiers")
+        self.logger.info(f"Classifying {len(symbols)} symbols by trading volume")
         
-        # Only analyze a subset of coins to avoid API overload
-        max_symbols_to_analyze = 100
-        symbols_to_analyze = symbols[:max_symbols_to_analyze] if len(symbols) > max_symbols_to_analyze else symbols
-        
-        # Get volume data
+        # Calculate average volume for each symbol
         volumes = {}
-        for symbol in symbols_to_analyze:
+        for symbol in symbols:
+            # Check if symbol already includes USDT suffix
+            full_symbol = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
             try:
-                # Get historical data
                 data = self.data_fetcher.fetch_historical_data(
-                    symbol=symbol,
-                    interval=timeframe,
-                    days=days,
-                    use_cache=True
+                    symbol=full_symbol,
+                    interval=timeframe,  # Use interval parameter instead of timeframe
+                    days=days
                 )
                 
-                if not data.empty:
-                    # Calculate average daily volume
+                if data is not None and not data.empty:
+                    # Calculate average volume
                     avg_volume = data['volume'].mean()
                     volumes[symbol] = avg_volume
             except Exception as e:
-                self.logger.warning(f"Failed to get volume data for {symbol}: {e}")
+                self.logger.warning(f"Error fetching data for {symbol}: {e}")
         
-        # Handle unanalyzed symbols
-        if len(symbols_to_analyze) < len(symbols):
-            self.logger.warning(f"Only analyzed volume for {len(symbols_to_analyze)} out of {len(symbols)} symbols, remaining will be placed in low volume category")
-            
-            # Unanalyzed symbols are assumed to be low volume
-            for symbol in symbols[max_symbols_to_analyze:]:
-                volumes[symbol] = 0
+        # Sort symbols by volume
+        sorted_symbols = sorted(volumes.keys(), key=lambda s: volumes[s], reverse=True)
         
-        # Sort
-        sorted_volumes = sorted(volumes.items(), key=lambda x: x[1], reverse=True)
-        sorted_symbols = [item[0] for item in sorted_volumes]
-        
-        # Divide into N tiers
+        # Create tiers
+        tier_size = len(sorted_symbols) // tiers
         result = {}
-        if not sorted_symbols:
-            return {"high_volume": []}
-            
-        symbols_per_tier = max(1, len(sorted_symbols) // tiers)
         
         for i in range(tiers):
-            start_idx = i * symbols_per_tier
-            # For the last tier, take all remaining
-            end_idx = None if i == tiers - 1 else (i + 1) * symbols_per_tier
-            
-            tier_name = ""
-            if i == 0:
-                tier_name = "high_volume"
-            elif i == tiers - 1:
-                tier_name = "low_volume"
-            else:
-                tier_name = f"medium_volume_{i}"
-                
+            tier_name = f"high_volume" if i == 0 else f"mid_volume_{i}" if i < tiers - 1 else "low_volume"
+            start_idx = i * tier_size
+            end_idx = (i + 1) * tier_size if i < tiers - 1 else len(sorted_symbols)
             result[tier_name] = sorted_symbols[start_idx:end_idx]
-            
+        
+        self.logger.info(f"Classified symbols into {len(result)} volume tiers")
         return result
     
-    def classify_by_volatility(self, symbols: List[str], days: int = 30, timeframe: str = '1d', tiers: int = 3) -> Dict[str, List[str]]:
+    def classify_by_volatility(self, symbols: List[str], days: int = 30, timeframe: str = '1h', tiers: int = 3) -> Dict[str, List[str]]:
         """
         Classify coins by price volatility
         
         Args:
-            symbols: List of coin symbols
-            days: Analysis period in days
-            timeframe: Time interval
-            tiers: Number of classification tiers
+            symbols: List of symbols to classify
+            days: Number of days to analyze
+            timeframe: Data timeframe
+            tiers: Number of tiers to create
             
         Returns:
-            Dict[str, List[str]]: Dictionary of coins classified by volatility
+            Dict[str, List[str]]: Classification results
         """
-        self.logger.info(f"Classifying {len(symbols)} symbols by volatility into {tiers} tiers")
+        self.logger.info(f"Classifying {len(symbols)} symbols by price volatility")
         
-        # Only analyze a subset of coins to avoid API overload
-        max_symbols_to_analyze = 100
-        symbols_to_analyze = symbols[:max_symbols_to_analyze] if len(symbols) > max_symbols_to_analyze else symbols
-        
-        # Get volatility data
+        # Calculate price volatility for each symbol
         volatilities = {}
-        for symbol in symbols_to_analyze:
+        for symbol in symbols:
+            # Check if symbol already includes USDT suffix
+            full_symbol = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
             try:
-                # Get historical data
                 data = self.data_fetcher.fetch_historical_data(
-                    symbol=symbol,
-                    interval=timeframe,
-                    days=days,
-                    use_cache=True
+                    symbol=full_symbol,
+                    interval=timeframe,  # Use interval parameter instead of timeframe
+                    days=days
                 )
                 
-                if not data.empty and len(data) > 1:
-                    # Calculate daily returns
+                if data is not None and not data.empty:
+                    # Calculate returns
                     data['returns'] = data['close'].pct_change()
                     
                     # Calculate volatility (standard deviation of returns)
                     volatility = data['returns'].std()
                     volatilities[symbol] = volatility
             except Exception as e:
-                self.logger.warning(f"Failed to calculate volatility for {symbol}: {e}")
+                self.logger.warning(f"Error fetching data for {symbol}: {e}")
         
-        # Handle unanalyzed symbols
-        if len(symbols_to_analyze) < len(symbols):
-            self.logger.warning(f"Only analyzed volatility for {len(symbols_to_analyze)} out of {len(symbols)} symbols, remaining will be placed in medium volatility category")
-            
-            # Unanalyzed symbols are assumed to have medium volatility
-            for symbol in symbols[max_symbols_to_analyze:]:
-                if symbol not in volatilities:
-                    volatilities[symbol] = 0.01  # Default value for medium volatility
+        # Sort symbols by volatility
+        sorted_symbols = sorted(volatilities.keys(), key=lambda s: volatilities[s], reverse=True)
         
-        # Sort
-        sorted_volatilities = sorted(volatilities.items(), key=lambda x: x[1], reverse=True)
-        sorted_symbols = [item[0] for item in sorted_volatilities]
-        
-        # Divide into N tiers
+        # Create tiers
+        tier_size = len(sorted_symbols) // tiers
         result = {}
-        if not sorted_symbols:
-            return {"high_volatility": []}
-            
-        symbols_per_tier = max(1, len(sorted_symbols) // tiers)
         
         for i in range(tiers):
-            start_idx = i * symbols_per_tier
-            # For the last tier, take all remaining
-            end_idx = None if i == tiers - 1 else (i + 1) * symbols_per_tier
-            
-            tier_name = ""
-            if i == 0:
-                tier_name = "high_volatility"
-            elif i == tiers - 1:
-                tier_name = "low_volatility"
-            else:
-                tier_name = f"medium_volatility_{i}"
-                
+            tier_name = f"high_volatility" if i == 0 else f"mid_volatility_{i}" if i < tiers - 1 else "low_volatility"
+            start_idx = i * tier_size
+            end_idx = (i + 1) * tier_size if i < tiers - 1 else len(sorted_symbols)
             result[tier_name] = sorted_symbols[start_idx:end_idx]
-            
+        
+        self.logger.info(f"Classified symbols into {len(result)} volatility tiers")
         return result
     
     def create_index_baskets(self, symbols: List[str], num_baskets: int = 5, basket_size: int = 20) -> Dict[str, List[str]]:
@@ -285,72 +170,116 @@ class CoinClassifier:
         self.logger.info(f"Successfully created {len(baskets)} random baskets")
         return baskets
     
-    def classify_by_sector(self, symbols: List[str]) -> Dict[str, List[str]]:
+    def classify_by_correlation(self, symbols: List[str], reference_symbols: List[str] = ['ETH', 'BTC'], 
+                                days: int = 30, timeframe: str = '1h', tiers: int = 3) -> Dict[str, Dict[str, List[str]]]:
         """
-        Classify coins by industry sector (simulated implementation)
+        Classify coins by their price correlation with reference symbols (ETH and BTC)
         
         Args:
-            symbols: List of coin symbols
+            symbols: List of symbols to classify
+            reference_symbols: List of reference symbols to calculate correlation against
+            days: Number of days to analyze
+            timeframe: Data timeframe
+            tiers: Number of tiers to create
             
         Returns:
-            Dict[str, List[str]]: Dictionary of coins classified by sector
+            Dict[str, Dict[str, List[str]]]: Classification results for each reference symbol
         """
-        self.logger.info(f"Classifying {len(symbols)} symbols by sector (simulated)")
+        self.logger.info(f"Classifying {len(symbols)} symbols by correlation with {reference_symbols}")
         
-        # Due to lack of direct sector classification data, we create simulated sector classifications
-        # In real applications, this should be replaced with actual industry classification data
-        import random
+        # Get reference data first
+        reference_data = {}
+        for ref_symbol in reference_symbols:
+            full_ref_symbol = ref_symbol if ref_symbol.endswith('USDT') else f"{ref_symbol}USDT"
+            try:
+                ref_data = self.data_fetcher.fetch_historical_data(
+                    symbol=full_ref_symbol,
+                    interval=timeframe,
+                    days=days
+                )
+                
+                if ref_data is not None and not ref_data.empty:
+                    # Calculate returns
+                    ref_data['returns'] = ref_data['close'].pct_change().dropna()
+                    reference_data[ref_symbol] = ref_data
+            except Exception as e:
+                self.logger.warning(f"Error fetching data for reference symbol {ref_symbol}: {e}")
+                
+        if not reference_data:
+            self.logger.error("Could not fetch any reference data, cannot calculate correlations")
+            return {}
+            
+        # Calculate correlations for each symbol with each reference symbol
+        correlations = {ref: {} for ref in reference_data.keys()}
         
-        # Define basic industry sectors
-        sectors = {
-            "defi": [],
-            "gaming": [],
-            "infrastructure": [],
-            "exchange": [],
-            "privacy": [],
-            "storage": [],
-            "other": []
-        }
-        
-        # Simple keyword matching (very basic example)
-        defi_keywords = ['uni', 'sushi', 'cake', 'comp', 'aave', 'mkr', 'crv', 'ldo', 'snx', 'rune']
-        gaming_keywords = ['sand', 'mana', 'axs', 'ape', 'gala', 'ilv', 'enj', 'alice']
-        infra_keywords = ['link', 'grt', 'fil', 'rndr', 'ar', 'api3', 'band', 'rlc']
-        exchange_keywords = ['bnb', 'okb', 'cro', 'ftm', 'kcs', 'gt', 'ht', 'ftt']
-        privacy_keywords = ['xmr', 'zcash', 'dash', 'scrt', 'rose', 'keep', 'mina']
-        storage_keywords = ['fil', 'sc', 'storj', 'ar', 'ocean']
-        
-        # Simple rule matching, in real applications there should be more complex logic
         for symbol in symbols:
-            base = symbol.replace('USDT', '').lower()
+            if symbol in reference_symbols:
+                continue  # Skip self-correlation
+                
+            full_symbol = symbol if symbol.endswith('USDT') else f"{symbol}USDT"
+            try:
+                data = self.data_fetcher.fetch_historical_data(
+                    symbol=full_symbol,
+                    interval=timeframe,
+                    days=days
+                )
+                
+                if data is not None and not data.empty:
+                    # Calculate returns
+                    data['returns'] = data['close'].pct_change().dropna()
+                    
+                    # Calculate correlation with each reference symbol
+                    for ref_symbol, ref_data in reference_data.items():
+                        # Align timestamps
+                        merged = pd.merge(
+                            data['returns'], 
+                            ref_data['returns'], 
+                            left_index=True, 
+                            right_index=True,
+                            how='inner',
+                            suffixes=('', f'_{ref_symbol}')
+                        )
+                        
+                        if not merged.empty and len(merged) > 5:  # Ensure enough data points
+                            # Calculate Pearson correlation
+                            correlation = merged['returns'].corr(merged[f'returns_{ref_symbol}'])
+                            correlations[ref_symbol][symbol] = correlation
+            except Exception as e:
+                self.logger.warning(f"Error calculating correlation for {symbol}: {e}")
+        
+        # Create classification for each reference
+        result = {}
+        
+        for ref_symbol, corr_dict in correlations.items():
+            # Sort symbols by correlation (highest first)
+            sorted_symbols = sorted(corr_dict.keys(), key=lambda s: corr_dict[s], reverse=True)
             
-            if any(kw in base for kw in defi_keywords):
-                sectors['defi'].append(symbol)
-            elif any(kw in base for kw in gaming_keywords):
-                sectors['gaming'].append(symbol)
-            elif any(kw in base for kw in infra_keywords):
-                sectors['infrastructure'].append(symbol)
-            elif any(kw in base for kw in exchange_keywords):
-                sectors['exchange'].append(symbol)
-            elif any(kw in base for kw in privacy_keywords):
-                sectors['privacy'].append(symbol)
-            elif any(kw in base for kw in storage_keywords):
-                sectors['storage'].append(symbol)
-            else:
-                sectors['other'].append(symbol)
-        
-        # Remove empty sectors
-        sectors = {k: v for k, v in sectors.items() if v}
-        
-        # If all sectors are empty, create an "unclassified" category
-        if not sectors:
-            sectors['unclassified'] = symbols
-        
-        # Log classification results
-        for sector, sector_symbols in sectors.items():
-            self.logger.info(f"Sector '{sector}' contains {len(sector_symbols)} coins")
+            # Create tiers
+            if not sorted_symbols:
+                continue
+                
+            tier_size = len(sorted_symbols) // tiers
+            ref_result = {}
             
-        return sectors
+            for i in range(tiers):
+                tier_name = f"high_correlation_{ref_symbol}" if i == 0 else \
+                            f"mid_correlation_{ref_symbol}_{i}" if i < tiers - 1 else \
+                            f"low_correlation_{ref_symbol}"
+                start_idx = i * tier_size
+                end_idx = (i + 1) * tier_size if i < tiers - 1 else len(sorted_symbols)
+                ref_result[tier_name] = sorted_symbols[start_idx:end_idx]
+            
+            result[ref_symbol] = ref_result
+            
+            # Log actual correlation values for each tier
+            for tier_name, tier_symbols in ref_result.items():
+                if tier_symbols:
+                    tier_corrs = [corr_dict[s] for s in tier_symbols]
+                    self.logger.info(f"{tier_name}: Avg Correlation = {np.mean(tier_corrs):.4f}, " +
+                                    f"Range = [{min(tier_corrs):.4f}, {max(tier_corrs):.4f}]")
+        
+        self.logger.info(f"Classified symbols by correlation with {len(result)} reference symbols")
+        return result
     
     def get_stable_coins(self, all_symbols: List[str]) -> List[str]:
         """

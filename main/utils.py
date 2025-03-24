@@ -125,88 +125,273 @@ class RateLimiter:
 
 
 class CacheManager:
-    """Cache Manager"""
+    """管理API響應的緩存"""
     
     def __init__(self, cache_dir: str = config.CACHE_DIR, expiry: int = config.DEFAULT_CACHE_EXPIRY):
         """
-        Initialize the cache manager
+        初始化緩存管理器
         
         Args:
-            cache_dir (str): Cache directory
-            expiry (int): Cache expiry time (seconds)
+            cache_dir (str): 緩存文件目錄
+            expiry (int): 緩存過期時間（秒）
         """
         self.cache_dir = cache_dir
-        self.cache_expiry = expiry
-        os.makedirs(self.cache_dir, exist_ok=True)
+        self.expiry = expiry
+        # 創建緩存目錄（如果不存在）
+        os.makedirs(cache_dir, exist_ok=True)
+        
+        # 增加緩存命中統計
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
+        # 內存緩存，用於最常訪問的項目
+        self.memory_cache = {}
+        self.memory_cache_size = 50  # 內存中保留的最大項目數
+        self.memory_cache_hits = 0
+        
+        # 調試信息
+        self.debug_enabled = False
+    
+    def enable_debug(self, enabled: bool = True) -> None:
+        """
+        啟用或禁用調試輸出
+        
+        Args:
+            enabled (bool): 是否啟用調試
+        """
+        self.debug_enabled = enabled
+    
+    def generate_key(self, symbol: str, interval: str, days: int, end_date: Optional[str] = None) -> str:
+        """
+        根據參數生成緩存鍵
+        
+        Args:
+            symbol (str): 幣種符號
+            interval (str): K線間隔
+            days (int): 天數
+            end_date (str, optional): 結束日期字符串
+            
+        Returns:
+            str: 緩存鍵
+        """
+        # 根據參數生成唯一鍵
+        key_components = f"{symbol}_{interval}_{days}"
+        if end_date:
+            key_components += f"_{end_date}"
+        
+        # 創建鍵組件的哈希
+        key_hash = hashlib.md5(key_components.encode()).hexdigest()
+        return key_hash
     
     def get_cache_key(self, symbol: str, timeframe: str, start_str: str, end_str: str, max_klines: int) -> str:
         """
-        Generate a unique cache key for a data request
+        根據參數獲取緩存鍵
         
         Args:
-            symbol (str): Trading pair symbol
-            timeframe (str): Timeframe
-            start_str (str): Start time
-            end_str (str): End time
-            max_klines (int): Maximum number of klines
+            symbol (str): 幣種符號
+            timeframe (str): K線時間框架
+            start_str (str): 開始時間字符串
+            end_str (str): 結束時間字符串
+            max_klines (int): 每個請求的最大K線數
             
         Returns:
-            str: Cache key
+            str: 緩存鍵
         """
+        # 基於所有參數創建唯一鍵
         key_str = f"{symbol}_{timeframe}_{start_str}_{end_str}_{max_klines}"
+        
+        # 創建鍵字符串的哈希
         return hashlib.md5(key_str.encode()).hexdigest()
+    
+    def get_file_path(self, cache_key: str) -> str:
+        """
+        獲取緩存文件路徑
+        
+        Args:
+            cache_key (str): 緩存鍵
+            
+        Returns:
+            str: 緩存文件路徑
+        """
+        return os.path.join(self.cache_dir, f"{cache_key}.pkl")
     
     def save(self, cache_key: str, data: Any) -> None:
         """
-        Save data to cache
+        將數據保存到緩存
         
         Args:
-            cache_key (str): Cache key
-            data (Any): Data to save
+            cache_key (str): 緩存鍵
+            data (Any): 要保存的數據
         """
+        cache_path = self.get_file_path(cache_key)
+        
         try:
-            cache_file = os.path.join(self.cache_dir, f"{cache_key}.pkl")
-            with open(cache_file, 'wb') as f:
-                pickle.dump({
-                    'timestamp': time.time(),
-                    'data': data
-                }, f)
+            # 檢查數據是否為DataFrame，是否有足夠的行數來值得緩存
+            save_to_disk = True
+            if isinstance(data, pd.DataFrame):
+                if data.empty:
+                    # 不緩存空DataFrame
+                    save_to_disk = False
+                elif len(data) < 10:
+                    # 少於10行的數據不值得緩存到磁盤
+                    self._log_debug(f"數據行數少於10（{len(data)}行），僅保存到內存緩存")
+                    save_to_disk = False
+            
+            # 保存到內存緩存
+            self.memory_cache[cache_key] = {
+                'data': data,
+                'timestamp': time.time()
+            }
+            
+            # 如果內存緩存過大，移除最舊的項目
+            if len(self.memory_cache) > self.memory_cache_size:
+                oldest_key = min(self.memory_cache.keys(), 
+                                key=lambda k: self.memory_cache[k]['timestamp'])
+                del self.memory_cache[oldest_key]
+            
+            # 如果需要，保存到磁盤
+            if save_to_disk:
+                with open(cache_path, 'wb') as f:
+                    pickle.dump({
+                        'data': data,
+                        'timestamp': time.time()
+                    }, f)
+                self._log_debug(f"已保存緩存：{os.path.basename(cache_path)}")
         except Exception as e:
-            print(f"Error saving to cache: {e}")
+            self._log_debug(f"保存緩存時出錯: {e}")
     
     def load(self, cache_key: str) -> Optional[Any]:
         """
-        Load data from cache
+        如果可用且未過期，從緩存加載數據
         
         Args:
-            cache_key (str): Cache key
+            cache_key (str): 緩存鍵
             
         Returns:
-            Optional[Any]: Cached data or None if not found or expired
+            Optional[Any]: 緩存的數據或None（如果不可用）
         """
-        try:
-            cache_file = os.path.join(self.cache_dir, f"{cache_key}.pkl")
-            if not os.path.exists(cache_file):
-                return None
+        # 首先檢查內存緩存
+        if cache_key in self.memory_cache:
+            cache_data = self.memory_cache[cache_key]
             
-            # Check if cache is expired
-            if time.time() - os.path.getmtime(cache_file) > self.cache_expiry:
-                # Cache is expired, remove it
-                os.remove(cache_file)
-                return None
-            
-            with open(cache_file, 'rb') as f:
-                cached = pickle.load(f)
-            
-            # Check if data in cache is expired
-            if time.time() - cached['timestamp'] > self.cache_expiry:
-                os.remove(cache_file)
-                return None
-            
-            return cached['data']
-        except Exception as e:
-            print(f"Error loading from cache: {e}")
+            # 檢查內存緩存是否過期
+            if time.time() - cache_data['timestamp'] <= self.expiry:
+                self.cache_hits += 1
+                self.memory_cache_hits += 1
+                self._log_debug(f"內存緩存命中: {cache_key[:8]}...")
+                return cache_data['data']
+            else:
+                # 從內存緩存中移除過期項目
+                del self.memory_cache[cache_key]
+        
+        # 然後檢查磁盤緩存
+        cache_path = self.get_file_path(cache_key)
+        
+        # 檢查緩存文件是否存在
+        if not os.path.exists(cache_path):
+            self.cache_misses += 1
             return None
+        
+        try:
+            with open(cache_path, 'rb') as f:
+                cache_data = pickle.load(f)
+            
+            # 檢查緩存是否過期
+            if time.time() - cache_data['timestamp'] > self.expiry:
+                self.cache_misses += 1
+                return None
+            
+            # 更新內存緩存
+            self.memory_cache[cache_key] = cache_data
+            
+            # 如果內存緩存過大，移除最舊的項目
+            if len(self.memory_cache) > self.memory_cache_size:
+                oldest_key = min(self.memory_cache.keys(), 
+                                key=lambda k: self.memory_cache[k]['timestamp'])
+                del self.memory_cache[oldest_key]
+            
+            self.cache_hits += 1
+            self._log_debug(f"磁盤緩存命中: {os.path.basename(cache_path)}")
+            return cache_data['data']
+        except Exception as e:
+            self._log_debug(f"加載緩存時出錯: {e}")
+            self.cache_misses += 1
+            return None
+    
+    def exists(self, cache_key: str) -> bool:
+        """
+        檢查緩存項是否存在且未過期
+        
+        Args:
+            cache_key (str): 緩存鍵
+            
+        Returns:
+            bool: 如果緩存項存在且未過期，則為True
+        """
+        # 首先檢查內存緩存
+        if cache_key in self.memory_cache:
+            # 檢查內存緩存是否過期
+            if time.time() - self.memory_cache[cache_key]['timestamp'] <= self.expiry:
+                return True
+        
+        # 然後檢查磁盤緩存
+        cache_path = self.get_file_path(cache_key)
+        
+        # 如果文件不存在，直接返回False
+        if not os.path.exists(cache_path):
+            return False
+        
+        try:
+            with open(cache_path, 'rb') as f:
+                cache_data = pickle.load(f)
+            
+            # 檢查緩存是否過期
+            return time.time() - cache_data['timestamp'] <= self.expiry
+        except Exception:
+            return False
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        獲取緩存統計信息
+        
+        Returns:
+            Dict[str, Any]: 緩存統計信息
+        """
+        total_requests = self.cache_hits + self.cache_misses
+        hit_rate = (self.cache_hits / total_requests * 100) if total_requests > 0 else 0
+        
+        # 計算緩存目錄大小
+        total_size = 0
+        file_count = 0
+        
+        for root, _, files in os.walk(self.cache_dir):
+            for file in files:
+                if file.endswith('.pkl'):
+                    file_path = os.path.join(root, file)
+                    total_size += os.path.getsize(file_path)
+                    file_count += 1
+        
+        return {
+            'cache_hits': self.cache_hits,
+            'cache_misses': self.cache_misses,
+            'hit_rate': hit_rate,
+            'memory_cache_size': len(self.memory_cache),
+            'memory_cache_limit': self.memory_cache_size,
+            'memory_cache_hits': self.memory_cache_hits,
+            'disk_cache_files': file_count,
+            'disk_cache_size_mb': total_size / (1024 * 1024),
+            'expiry_seconds': self.expiry
+        }
+    
+    def _log_debug(self, message: str) -> None:
+        """
+        記錄調試信息
+        
+        Args:
+            message (str): 調試消息
+        """
+        if self.debug_enabled:
+            print(f"[CacheManager] {message}")
 
 
 class ProxyManager:
@@ -350,33 +535,35 @@ def calculate_abnormal_returns(coin_data: Dict[str, pd.DataFrame],
     
     return abnormal_returns
 
-def calculate_optimal_batch_size_for_fetching(interval: str, days: int, max_klines: int) -> int:
+def calculate_optimal_batch_size_for_fetching(interval: str, days: int = 30, max_klines: int = 1000) -> int:
     """
-    Calculate optimal batch size for fetching historical data based on timeframe
+    Calculate the optimal batch size for fetching historical data
+    based on the interval and number of days
     
     Args:
-        interval (str): Kline interval (e.g., '1m', '1h')
-        days (int): Number of days to fetch
-        max_klines (int): Maximum number of klines per request
+        interval (str): Kline interval (e.g., '1m', '5m', '1h')
+        days (int): Number of days of data to fetch
+        max_klines (int): Maximum number of klines allowed per request
         
     Returns:
-        int: Optimal batch size in minutes
+        int: Optimal batch size
     """
-    # Get interval in minutes
-    interval_minutes = config.TIMEFRAME_MINUTES.get(interval, 1)
+    # Calculate interval in minutes
+    interval_minutes = 0
+    if 'm' in interval:
+        interval_minutes = int(interval.replace('m', ''))
+    elif 'h' in interval:
+        interval_minutes = int(interval.replace('h', '')) * 60
+    elif 'd' in interval:
+        interval_minutes = int(interval.replace('d', '')) * 60 * 24
     
-    # Calculate total number of candles
-    total_minutes = days * 24 * 60
-    total_candles = total_minutes // interval_minutes
+    # Calculate total number of klines
+    total_klines = (days * 24 * 60) // interval_minutes
     
-    # Calculate number of batches needed
-    num_batches = (total_candles + max_klines - 1) // max_klines
+    # Calculate optimal batch size
+    batch_size = min(total_klines, max_klines)
     
-    # Calculate batch size in minutes
-    batch_size = total_minutes // max(1, num_batches)
-    
-    # Ensure reasonable batch size (between 60 minutes and 24 hours)
-    return max(60, min(batch_size, 24 * 60))
+    return batch_size
 
 def calculate_sample_size_requirement(effect_size: float = 0.5, 
                                      alpha: float = 0.05, 

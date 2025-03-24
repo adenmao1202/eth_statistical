@@ -1,3 +1,0 @@
-symbol,mean_abnormal_return,p_value,current_sample_size,required_sample_size_80power,required_sample_size_90power,required_sample_size_95power
-BMTUSDT,-0.8337439316348005,0.20527596800207837,2,5,5,6
-REDUSDT,0.4565879266317846,0.22529732392329646,71,375,501,619

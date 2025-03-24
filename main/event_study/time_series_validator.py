@@ -295,6 +295,16 @@ class TimeSeriesValidator:
         for symbol, data in coin_data.items():
             symbol_performances = []
             
+            # Skip if no data available
+            if data is None or len(data) == 0:
+                continue
+                
+            # 處理可能的重複索引問題
+            if not data.index.is_unique:
+                self.logger.warning(f"Duplicate timestamps found for {symbol}, fixing by keeping last values")
+                # 保留最後一個出現的值（通常是最新的）
+                data = data.loc[~data.index.duplicated(keep='last')]
+                
             for event in eth_events:
                 event_time = event['time']
                 
@@ -572,4 +582,91 @@ class TimeSeriesValidator:
         except Exception as e:
             self.logger.error(f"Error plotting period comparison: {e}")
             import traceback
-            self.logger.error(traceback.format_exc()) 
+            self.logger.error(traceback.format_exc())
+
+    def _calculate_period_performance(self, symbols: List[str], eth_events: List[datetime], 
+                                      start_date: datetime, end_date: datetime,
+                                      pre_event_window: int = 10, post_event_window: int = 30) -> Dict[str, float]:
+        """
+        Calculate average performance of each coin during ETH drop events in a specific time period
+        
+        Args:
+            symbols: List of cryptocurrency symbols to analyze
+            eth_events: List of datetime objects representing ETH drop events
+            start_date: Start date of the period
+            end_date: End date of the period
+            pre_event_window: Number of periods before the event (default: 10)
+            post_event_window: Number of periods after the event (default: 30)
+            
+        Returns:
+            Dictionary mapping symbols to their average performance across events
+        """
+        performances = {}
+        
+        # 計算天數差
+        days_diff = (end_date - start_date).days + 1  # 加1包含結束日期
+        
+        # Load ETH data for reference
+        eth_data = self.data_fetcher.fetch_historical_data(
+            symbol='ETHUSDT', 
+            interval=self.timeframe,
+            days=days_diff,
+            end_date=end_date.strftime('%Y-%m-%d')
+        )
+        
+        # Skip if no ETH data available
+        if eth_data is None or len(eth_data) == 0:
+            self.logger.warning(f"No ETH data available for period {start_date} to {end_date}")
+            return {}
+        
+        for symbol in symbols:
+            symbol_performances = []
+            
+            # Load historical data
+            data = self.data_fetcher.fetch_historical_data(
+                symbol=symbol+'USDT', 
+                interval=self.timeframe,
+                days=days_diff,
+                end_date=end_date.strftime('%Y-%m-%d')
+            )
+            
+            # Skip if no data available
+            if data is None or len(data) == 0:
+                continue
+                
+            # 處理可能的重複索引問題
+            if not data.index.is_unique:
+                self.logger.warning(f"Duplicate timestamps found for {symbol}, fixing by keeping last values")
+                # 保留最後一個出現的值（通常是最新的）
+                data = data.loc[~data.index.duplicated(keep='last')]
+                
+            for event_time in eth_events:
+                
+                try:
+                    # Find pre-event reference price
+                    pre_event_price = None
+                    closest_idx = data.index.get_indexer([event_time], method='nearest')[0]
+                    
+                    if closest_idx >= 0 and closest_idx < len(data):
+                        # Look back to find pre-event price
+                        pre_event_idx = max(0, closest_idx - pre_event_window)
+                        pre_event_price = data.iloc[pre_event_idx]['close']
+                        
+                        # Look forward to find post-event price
+                        post_event_idx = min(len(data) - 1, closest_idx + post_event_window)
+                        post_event_price = data.iloc[post_event_idx]['close']
+                        
+                        # Calculate performance
+                        if pre_event_price is not None and pre_event_price > 0:
+                            performance = (post_event_price / pre_event_price) - 1
+                            symbol_performances.append(performance)
+                
+                except Exception as e:
+                    self.logger.warning(f"Error calculating performance for {symbol} at {event_time}: {e}")
+            
+            # Average performance across all events in this period
+            if symbol_performances:
+                performances[symbol] = np.mean(symbol_performances)
+        
+        self.logger.info(f"Calculated performance for {len(performances)} coins in period {start_date} to {end_date}")
+        return performances 

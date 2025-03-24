@@ -9,6 +9,12 @@ Contains all constants and configuration parameters for the cryptocurrency analy
 import os
 from binance.client import Client
 
+# API Configuration
+API_KEY = None  # 设置为None以使用公共API
+API_SECRET = None  # 设置为None以使用公共API
+USE_PROXIES = False  # Whether to use proxies
+MAX_WORKERS = 5  # Maximum number of worker threads
+
 # Default API settings
 DEFAULT_MAX_KLINES = 1000
 DEFAULT_REQUEST_DELAY = 1.0

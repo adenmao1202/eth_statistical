@@ -23,10 +23,14 @@ parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if parent_dir not in sys.path:
     sys.path.append(parent_dir)
 
+# Import necessary modules from parent directory
 import config
 from data_fetcher import DataFetcher
 from coin_classifier import CoinClassifier
 from time_series_validator import TimeSeriesValidator
+from robust_event_analyzer import RobustEventAnalyzer
+from robust_event_study import RobustEventStudy
+
 
 # Set up logging
 logging.basicConfig(
@@ -49,10 +53,15 @@ def parse_args():
     """Parse command line arguments"""
     parser = argparse.ArgumentParser(description="ETH Event Study with Cross-period Validation")
     
+    # Analysis type
+    parser.add_argument("--mode", type=str, default="robust_event_study", 
+                       choices=["validation", "event_study", "robust_event_study", "robust_event_analyzer"],
+                       help="Analysis mode to run")
+    
     # Data parameters
-    parser.add_argument("--timeframe", type=str, default="1h", help="Data timeframe (e.g., 1m, 5m, 15m, 1h, 4h, 1d)")
-    parser.add_argument("--total_days", type=int, default=360, help="Total days to analyze")
-    parser.add_argument("--period_length", type=int, default=90, help="Length of each validation period in days")
+    parser.add_argument("--timeframe", type=str, default="5m", help="Data timeframe (e.g., 1m, 5m, 15m, 1h, 4h, 1d)")
+    parser.add_argument("--total_days", type=int, default=120, help="Total days to analyze")
+    parser.add_argument("--period_length", type=int, default=30, help="Length of each validation period in days")
     parser.add_argument("--request_delay", type=float, default=0.1, help="Delay between API requests in seconds")
     parser.add_argument("--use_cache", action="store_true", help="Use cached data when available")
     
@@ -64,23 +73,36 @@ def parse_args():
     parser.add_argument("--create_random_baskets", action="store_true", help="Create random coin baskets for comparison")
     
     # ETH event parameters
-    parser.add_argument("--drop_threshold", type=float, default=-0.02, help="ETH price drop threshold (negative value)")
+    parser.add_argument("--drop_threshold", type=float, default=-0.01, help="ETH price drop threshold (negative value)")
     parser.add_argument("--consecutive_drops", type=int, default=1, help="Number of consecutive candles with drops")
-    parser.add_argument("--volume_factor", type=float, default=1.5, help="Volume increase factor for ETH events")
+    parser.add_argument("--volume_factor", type=float, default=1.2, help="Volume increase factor for ETH events")
+    
+    # Hypothesis testing parameters
+    parser.add_argument("--pre_event_window", type=int, default=config.PRE_EVENT_WINDOW, 
+                       help="Pre-event window in minutes")
+    parser.add_argument("--post_event_window", type=int, default=config.POST_EVENT_WINDOW, 
+                       help="Post-event window in minutes")
+    parser.add_argument("--significance_level", type=float, default=config.SIGNIFICANCE_LEVEL, 
+                       help="Statistical significance level")
+    
+    # Output parameters
+    parser.add_argument("--output_suffix", type=str, default="", 
+                       help="Suffix to add to output directory name")
     
     return parser.parse_args()
 
 def run_validation(args):
     """Run cross-period robustness validation"""
     try:
-        # Create data fetcher
         data_fetcher = DataFetcher(
+            api_key=config.API_KEY,
+            api_secret=config.API_SECRET,
             request_delay=args.request_delay,
-            use_proxies=False,
-            max_workers=4
+            max_workers=config.MAX_WORKERS,
+            use_proxies=config.USE_PROXIES
         )
         
-        # Create coin classifier
+        # Initialize coin classifier
         classifier = CoinClassifier(data_fetcher)
         
         # Create time series validator
@@ -266,6 +288,122 @@ def run_validation(args):
         logger.error(f"Error running cross-period robustness validation: {e}")
         console.print(f"[bold red]Error running cross-period robustness validation: {e}[/bold red]")
 
+def run_event_study(args):
+    """Run the robust event study with hypothesis testing integration"""
+    try:
+        # 修改API检查逻辑，允许使用公共API
+        # 初始化data_fetcher，即使没有API密钥也能继续
+        data_fetcher = DataFetcher(
+            api_key=config.API_KEY,
+            api_secret=config.API_SECRET,
+            request_delay=args.request_delay,
+            max_workers=config.MAX_WORKERS,
+            use_proxies=config.USE_PROXIES
+        )
+        
+        # Initialize robust event study
+        event_study = RobustEventStudy(data_fetcher)
+        
+        # Determine classification methods
+        classification_methods = []
+        if args.classify_by_market_cap:
+            classification_methods.append("market_cap")
+        if args.classify_by_volume:
+            classification_methods.append("volume")
+        if args.classify_by_volatility:
+            classification_methods.append("volatility")
+        if args.create_random_baskets:
+            classification_methods.append("random")
+            
+        # If no methods specified, use default
+        if not classification_methods:
+            classification_methods = ["market_cap"]
+            console.print("[yellow]No classification method specified, using market cap classification by default[/yellow]")
+        
+        # Set ETH event parameters
+        eth_event_params = {
+            'drop_threshold': args.drop_threshold,
+            'consecutive_drops': args.consecutive_drops,
+            'volume_factor': args.volume_factor
+        }
+        
+        # Run analysis
+        results = event_study.run_analysis(
+            classification_methods=classification_methods,
+            total_days=args.total_days,
+            period_length=args.period_length,
+            timeframe=args.timeframe,
+            eth_event_params=eth_event_params,
+            output_suffix=args.output_suffix
+        )
+        
+        # Display output directory
+        if 'output_dir' in results:
+            console.print(f"\n[bold green]Analysis completed! Results saved to: {results['output_dir']}[/bold green]")
+        
+    except Exception as e:
+        logger.error(f"Error running robust event study: {e}")
+        console.print(f"[bold red]Error running robust event study: {e}[/bold red]")
+
+def run_robust_event_analyzer(args):
+    """Run the robust event analyzer with hypothesis testing"""
+    try:
+   
+        data_fetcher = DataFetcher(
+            api_key=config.API_KEY,
+            api_secret=config.API_SECRET,
+            request_delay=args.request_delay,
+            max_workers=config.MAX_WORKERS,
+            use_proxies=config.USE_PROXIES
+        )
+        
+        # Initialize robust event analyzer
+        analyzer = RobustEventAnalyzer(data_fetcher)
+        
+        # Initialize coin classifier to get symbols
+        classifier = CoinClassifier(data_fetcher)
+        
+        # Get symbols to analyze
+        all_symbols = data_fetcher._get_symbols()
+        if not all_symbols:
+            console.print("[bold red]Unable to fetch trading pairs. Please check your network connection and API settings.[/bold red]")
+            return
+            
+        # Remove stablecoins
+        stable_coins = classifier.get_stable_coins(all_symbols)
+        filtered_symbols = [s for s in all_symbols if s not in stable_coins]
+        
+        # Sample random symbols if too many
+        max_symbols = 100
+        if len(filtered_symbols) > max_symbols:
+            symbols = random.sample(filtered_symbols, max_symbols)
+        else:
+            symbols = filtered_symbols
+            
+        console.print(f"[green]Analyzing {len(symbols)} coins out of {len(filtered_symbols)} non-stablecoin pairs[/green]")
+        
+        # Set ETH event parameters
+        eth_event_params = {
+            'drop_threshold': args.drop_threshold,
+            'consecutive_drops': args.consecutive_drops,
+            'volume_factor': args.volume_factor
+        }
+        
+        # Run analysis
+        results = analyzer.run_robust_analysis(
+            symbols=symbols,
+            total_days=args.total_days,
+            period_length=args.period_length,
+            timeframe=args.timeframe,
+            eth_event_params=eth_event_params
+        )
+        
+        console.print("[bold green]Robust event analysis completed![/bold green]")
+        
+    except Exception as e:
+        logger.error(f"Error running robust event analyzer: {e}")
+        console.print(f"[bold red]Error running robust event analyzer: {e}[/bold red]")
+
 def main():
     """Main function"""
     console.print("[bold blue]ETH Event Study with Cross-period Validation[/bold blue]")
@@ -273,8 +411,18 @@ def main():
     # Parse command line arguments
     args = parse_args()
     
-    # Run validation
-    run_validation(args)
+    # Run based on selected mode
+    if args.mode == "validation":
+        run_validation(args)
+    elif args.mode == "event_study":
+        run_event_study(args)
+    elif args.mode == "robust_event_study":
+        run_event_study(args)
+    elif args.mode == "robust_event_analyzer":
+        run_robust_event_analyzer(args)
+    else:
+        console.print(f"[bold red]Unknown mode: {args.mode}[/bold red]")
+        return
     
     console.print("[bold green]Analysis completed![/bold green]")
 
